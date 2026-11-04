@@ -1,10 +1,24 @@
 /* Aotearoa land-use cellular automaton, 1840–2025.
-   Demand-constrained CA: national class totals follow keyframe curves,
-   the CA decides WHERE change happens (suitability + neighbourhood + access + noise). */
+   Demand-constrained CA on a real DEM, anchored to LCDB v6 land cover (1996/97–2023/24).
+   National class totals follow keyframe curves that are rescaled to meet the observed
+   totals; the CA decides WHERE and WHEN change happens (suitability + neighbourhood +
+   access to towns + noise).
+
+   Anchored mode (default): every cell is forced to its observed LCDB class at each LCDB
+   epoch. The 1840 map keeps the natural cover LCDB still shows in 1996 and reconstructs the
+   rest; between 1840 and 1996 each cell may only move towards its observed 1996 class, so
+   the CA chooses timing and route. Between LCDB epochs, observed changes are spread over
+   the interval. Dairy vs sheep & beef is never observed: dairy is allocated inside LCDB
+   high-producing grassland to match national dairy area.
+
+   Free mode (anchor: false): the 1840 map comes from terrain rules only and the CA runs
+   unconstrained (national totals still match LCDB); agreement with LCDB is reported. */
 var NZModel = (function () {
   'use strict';
   var C = { SEA: 0, NAT: 1, SCRUB: 2, TUSS: 3, WET: 4, ALP: 5, SHEEP: 6, DAIRY: 7, PINE: 8, CROP: 9, URB: 10, LAKE: 11 };
+  var HPG = 12;                                   // observed code: high-producing exotic grassland
   var Y0 = 1840, Y1 = 2025;
+  var FOREST1840 = 0.53, TUSS1840 = 0.215, WET_REMAIN = 0.10, GARDENS1840 = 0.0025;
 
   // ---------- helpers ----------
   function mulberry(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; var t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
@@ -23,57 +37,12 @@ var NZModel = (function () {
     for (var i = 1; i < keys.length; i++) if (year <= keys[i][0]) { var a = keys[i - 1], b = keys[i]; return a[1] + (b[1] - a[1]) * (year - a[0]) / (b[0] - a[0]); }
     return keys[keys.length - 1][1];
   }
+  function b64bytes(s) {
+    if (typeof atob === 'function') { var r = atob(s), a = new Uint8Array(r.length); for (var i = 0; i < r.length; i++) a[i] = r.charCodeAt(i); return a; }
+    return new Uint8Array(Buffer.from(s, 'base64'));
+  }
 
   // ---------- geography inputs (approximate, hand-placed) ----------
-  // ridges: [peak m, width km, [lon,lat]...]
-  var RIDGES = [
-    [2300, 22, [168.25, -44.55], [168.9, -44.1], [169.6, -43.8], [170.15, -43.6], [170.7, -43.3], [171.4, -42.95], [172.1, -42.55], [172.7, -42.1], [173.1, -41.7]],
-    [3400, 9, [170.0, -43.7], [170.25, -43.5]],
-    [2000, 16, [170.45, -43.75], [170.9, -43.45], [171.3, -43.25]],
-    [1500, 14, [171.35, -43.35], [171.9, -43.0], [172.4, -42.75], [172.8, -42.6]],
-    [2200, 13, [172.95, -42.45], [173.5, -42.15], [173.95, -41.85]],
-    [1600, 14, [172.95, -41.75], [173.35, -41.5], [173.7, -41.35]],
-    [1600, 22, [172.3, -40.9], [172.55, -41.3], [172.4, -41.65], [172.15, -41.95]],
-    [1200, 9, [171.4, -42.0], [171.55, -42.35]],
-    [1600, 26, [167.15, -46.0], [167.5, -45.5], [167.95, -45.0], [168.3, -44.6]],
-    [1300, 18, [166.9, -45.7], [167.35, -45.15]],
-    [1500, 14, [168.05, -45.75], [168.35, -45.35]],
-    [1700, 30, [168.9, -44.55], [169.3, -44.9], [169.55, -45.3]],
-    [1500, 28, [169.7, -44.75], [170.2, -44.95]],
-    [1300, 25, [169.0, -45.2], [169.6, -45.6], [170.0, -45.6]],
-    [1600, 20, [168.6, -45.0], [168.85, -44.75]],
-    [650, 20, [169.0, -46.45], [169.5, -46.4]],
-    [500, 12, [168.6, -46.05], [168.9, -45.95]],
-    [850, 11, [172.8, -43.75], [173.0, -43.78]],
-    [600, 10, [170.4, -45.85], [170.7, -45.82]],
-    [850, 14, [167.8, -46.95], [168.05, -47.05]],
-    // North Island
-    [1450, 13, [175.05, -41.35], [175.35, -40.9], [175.55, -40.6]],
-    [1600, 12, [175.7, -40.25], [176.0, -39.9], [176.25, -39.55]],
-    [1600, 18, [176.05, -39.45], [176.35, -39.15], [176.5, -38.9]],
-    [1250, 20, [176.65, -38.95], [177.0, -38.65], [177.25, -38.35]],
-    [1500, 15, [177.6, -38.1], [177.9, -37.75], [178.05, -37.55]],
-    [650, 30, [177.0, -39.05], [177.6, -38.6], [178.1, -38.3]],
-    [500, 18, [176.0, -40.85], [176.4, -40.35], [176.65, -40.0]],
-    [550, 38, [174.9, -39.4], [175.1, -39.8]],
-    [700, 30, [175.3, -38.5], [175.45, -38.85]],
-    [800, 8, [175.5, -37.2], [175.65, -36.85], [175.8, -36.55]],
-    [850, 7, [175.75, -37.95], [175.9, -37.6]],
-    [600, 9, [175.15, -37.05], [175.25, -37.15]],
-    [420, 7, [174.5, -36.85], [174.55, -37.0]],
-    [550, 22, [173.4, -35.4], [173.75, -35.65]],
-    [450, 18, [174.0, -35.2], [174.25, -35.6]],
-    [300, 15, [174.4, -36.2], [174.6, -36.5]]
-  ];
-  // blobs: [lon,lat,height,width km,shape exponent]
-  var BLOBS = [
-    [175.75, -38.95, 750, 55, 4], [176.5, -38.45, 450, 40, 4], [176.25, -38.15, 350, 25, 4],
-    [175.57, -39.28, 2050, 9, 2], [175.65, -39.14, 1400, 7, 2], [174.06, -39.30, 2200, 9, 2], [174.15, -39.3, 250, 25, 3],
-    [170.25, -44.1, 650, 40, 4], [169.4, -45.15, 250, 30, 4]
-  ];
-  // lakes: [lon,lat,rx km,ry km]
-  var LAKES = [[175.9, -38.8, 14, 11], [176.27, -38.08, 5, 5], [168.66, -45.08, 3, 3], [168.52, -45.3, 3, 4], [168.75, -44.98, 4, 2.5], [167.7, -45.2, 4, 11], [167.6, -45.5, 4, 4],
-    [169.12, -44.6, 3, 9], [169.27, -44.55, 3, 8], [170.17, -44.1, 3, 8], [170.52, -43.95, 3, 7], [172.3, -43.8, 9, 4], [176.4, -39.35, 0, 0]];
   var WETZONES = [[175.55, -37.25, 18], [175.3, -37.55, 18], [175.3, -37.85, 14], [173.3, -35.05, 12], [175.3, -40.45, 18], [168.5, -46.25, 18], [168.95, -46.35, 12],
     [176.85, -37.95, 14], [176.85, -39.55, 10], [174.2, -36.25, 12], [171.3, -42.6, 15], [170.6, -43.1, 12], [172.45, -43.65, 12], [172.95, -41.15, 6], [173.9, -41.48, 8]];
   // Māori population centres c.1840: [lon,lat,weight]
@@ -101,7 +70,7 @@ var NZModel = (function () {
     ['Kawerau', 176.7, -38.1, 1953, [0, 0, 1, 7]], ['Te Anau', 167.72, -45.42, 1955, [0, 0, 0.2, 3]], ['Twizel', 170.1, -44.26, 1968, [0, 0, 0, 1.5]],
     ['Wānaka', 169.13, -44.7, 1863, [0, 0.1, 0.5, 12]]
   ];
-  // protected forest: [lon,lat,r km,year]
+  // protected forest (free mode): [lon,lat,r km,year]
   var PROTECT = [[175.6, -39.2, 18, 1887], [174.06, -39.3, 10, 1881], [177.0, -38.75, 30, 1954], [171.6, -42.95, 20, 1929], [167.4, -45.4, 70, 1904], [170.1, -43.5, 25, 1953],
     [168.7, -44.4, 35, 1964], [172.4, -41.3, 35, 1970], [171.4, -42.1, 12, 1987], [175.3, -40.85, 20, 1954], [176.0, -39.9, 22, 1976], [176.2, -39.15, 20, 1969],
     [175.6, -38.5, 15, 1978], [176.65, -38.7, 12, 1984], [173.6, -35.65, 10, 1952], [175.65, -36.9, 15, 1971], [169.4, -46.45, 15, 1958], [167.95, -47.0, 25, 1907],
@@ -111,109 +80,140 @@ var NZModel = (function () {
   var PINESPOTS = [[176.4, -38.45, 38, 1922, 1.35], [175.85, -38.3, 30, 1945, 1.0], [178.0, -38.3, 45, 1985, 1.0], [173.7, -35.8, 50, 1965, 0.8], [172.95, -41.35, 30, 1960, 0.8],
     [172.2, -43.4, 15, 1925, 0.8], [169.6, -46.1, 40, 1960, 0.6], [176.6, -39.4, 35, 1970, 0.7], [175.2, -39.6, 40, 1975, 0.5], [174.6, -36.45, 20, 1930, 0.8]];
 
-  // ---------- national demand curves (% of land) ----------
+  // ---------- historical curve shapes ----------
+  // NAT/WET/TUSS relative to 1840; others % of land. Before the first LCDB epoch they are
+  // rescaled so they meet the observed LCDB totals; afterwards LCDB totals are used directly.
   var DEM = {
-    NAT: [[1840, 1], [1860, 0.96], [1880, 0.85], [1900, 0.70], [1920, 0.58], [1940, 0.53], [1960, 0.50], [1980, 0.48], [2000, 0.465], [2025, 0.46]], // relative to 1840
+    NAT: [[1840, 1], [1860, 0.96], [1880, 0.85], [1900, 0.70], [1920, 0.58], [1940, 0.53], [1960, 0.50], [1980, 0.48], [2000, 0.465], [2025, 0.46]],
     WET: [[1840, 1], [1860, 0.95], [1880, 0.84], [1900, 0.64], [1920, 0.45], [1940, 0.32], [1960, 0.22], [1980, 0.15], [2000, 0.12], [2025, 0.10]],
     TUSS: [[1840, 1], [1860, 0.98], [1880, 0.93], [1900, 0.86], [1920, 0.8], [1940, 0.75], [1960, 0.64], [1980, 0.54], [2000, 0.48], [2025, 0.45]],
-    SHEEP: [[1840, 0], [1860, 0.6], [1880, 6], [1900, 17], [1920, 25], [1940, 28], [1960, 32], [1980, 36], [1990, 35], [2000, 33], [2010, 31], [2025, 30]],
     DAIRY: [[1840, 0], [1880, 0.1], [1900, 1.0], [1920, 3.0], [1940, 4.0], [1960, 4.6], [1980, 4.4], [1990, 4.8], [2000, 5.6], [2010, 6.4], [2025, 6.5]],
     PINE: [[1840, 0], [1900, 0], [1920, 0.1], [1930, 0.6], [1940, 1.2], [1960, 1.5], [1980, 3.5], [1990, 4.8], [2000, 6.6], [2010, 6.4], [2020, 6.6], [2025, 7.0]],
     CROP: [[1840, 0.25], [1860, 0.4], [1880, 1.0], [1900, 1.4], [1920, 1.3], [1940, 1.2], [1960, 1.3], [1980, 1.6], [2000, 1.7], [2025, 1.9]],
-    URB: [[1840, 0.006], [1860, 0.03], [1880, 0.07], [1900, 0.13], [1920, 0.2], [1940, 0.3], [1960, 0.45], [1980, 0.65], [2000, 0.8], [2025, 0.95]]
+    URB: [[1840, 0.006], [1860, 0.03], [1880, 0.07], [1900, 0.13], [1920, 0.2], [1940, 0.3], [1960, 0.45], [1980, 0.65], [2000, 0.8], [2025, 0.95]],
+    // scrub as a share of (scrub + sheep & beef) land
+    SCRUBF: [[1840, 1], [1860, 0.97], [1880, 0.75], [1900, 0.48], [1920, 0.36], [1950, 0.28], [1980, 0.2]]
   };
 
   // ---------- static build ----------
   function build(grid) {
-    var W = grid.W, H = grid.H, CELL = grid.CELL, K = grid.K, KY = grid.KY;
-    var raw = typeof atob === 'function' ? atob(grid.mask) : Buffer.from(grid.mask, 'base64').toString('binary');
-    var mask = new Uint8Array(W * H);
-    for (var i = 0; i < W * H; i++) mask[i] = (raw.charCodeAt(i >> 3) >> (i & 7)) & 1;
+    var W = grid.W, H = grid.H, CELL = grid.CELL, K = grid.K, KY = grid.KY, WH = W * H;
+    var mb = b64bytes(grid.mask), mask = new Uint8Array(WH), i, k, x, y;
+    for (i = 0; i < WH; i++) mask[i] = (mb[i >> 3] >> (i & 7)) & 1;
     var lonOf = function (gx) { return grid.LON0 + (gx + 0.5) * CELL / K; };
     var latOf = function (gy) { return grid.LATTOP - (gy + 0.5) * CELL / KY; };
     var gxOf = function (lon) { return (lon - grid.LON0) * K / CELL - 0.5; };
     var gyOf = function (lat) { return (grid.LATTOP - lat) * KY / CELL - 0.5; };
 
+    var idx = new Int32Array(WH).fill(-1), n = 0;
+    for (k = 0; k < WH; k++) if (mask[k]) idx[k] = n++;
+    var cells = new Int32Array(n); for (k = 0; k < WH; k++) if (mask[k]) cells[idx[k]] = k;
+
+    // elevation (m) and slope (degrees, from the 300 m DEM)
+    var eb = b64bytes(grid.elev), sb = b64bytes(grid.slope);
+    var el = new Float32Array(n), sl = new Float32Array(n), elev = new Float32Array(WH);
+    for (i = 0; i < n; i++) { el[i] = eb[2 * i] | (eb[2 * i + 1] << 8); sl[i] = sb[i] / 4; elev[cells[i]] = el[i]; }
+
     // distance to sea (chamfer, km)
-    var dc = new Float32Array(W * H);
-    for (i = 0; i < W * H; i++) dc[i] = mask[i] ? 1e9 : 0;
-    var x, y, k, d, a = 1, b = 1.414;
+    var dc = new Float32Array(WH), d, a = CELL, b = CELL * 1.414;
+    for (i = 0; i < WH; i++) dc[i] = mask[i] ? 1e9 : 0;
     for (y = 0; y < H; y++) for (x = 0; x < W; x++) { k = y * W + x; d = dc[k]; if (!d) continue;
       if (x > 0) d = Math.min(d, dc[k - 1] + a); if (y > 0) { d = Math.min(d, dc[k - W] + a); if (x > 0) d = Math.min(d, dc[k - W - 1] + b); if (x < W - 1) d = Math.min(d, dc[k - W + 1] + b); } dc[k] = d; }
     for (y = H - 1; y >= 0; y--) for (x = W - 1; x >= 0; x--) { k = y * W + x; d = dc[k]; if (!d) continue;
       if (x < W - 1) d = Math.min(d, dc[k + 1] + a); if (y < H - 1) { d = Math.min(d, dc[k + W] + a); if (x < W - 1) d = Math.min(d, dc[k + W + 1] + b); if (x > 0) d = Math.min(d, dc[k + W - 1] + b); } dc[k] = d; }
 
-    // elevation on full grid (sea = 0)
-    var elev = new Float32Array(W * H);
-    var segs = [];
-    RIDGES.forEach(function (r) { for (var s = 2; s < r.length - 1; s++) segs.push([r[0], r[1], gxOf(r[s][0]), gyOf(r[s][1]), gxOf(r[s + 1][0]), gyOf(r[s + 1][1])]); });
-    var blobs = BLOBS.map(function (bb) { return [gxOf(bb[0]), gyOf(bb[1]), bb[2], bb[3], bb[4]]; });
-    for (y = 0; y < H; y++) for (x = 0; x < W; x++) {
-      k = y * W + x; if (!mask[k]) continue;
-      var e = 0;
-      var wx0 = x + 5 * fbm(x / 14, y / 14, 31), wy0 = y + 5 * fbm(x / 14, y / 14, 57);
-      for (var s = 0; s < segs.length; s++) {
-        var g = segs[s], vx = g[4] - g[2], vy = g[5] - g[3], wx = wx0 - g[2], wy = wy0 - g[3];
-        var t = clamp((wx * vx + wy * vy) / (vx * vx + vy * vy), 0, 1), ddx = wx - t * vx, ddy = wy - t * vy;
-        var dk = Math.sqrt(ddx * ddx + ddy * ddy) * CELL / g[1];
-        if (dk < 5) { var h = g[0] * (0.72 + 0.6 * vnoise(x / 7, y / 7, 91)) * Math.exp(-Math.pow(dk, 1.15)); if (h > e) e = h; }
-      }
-      for (s = 0; s < blobs.length; s++) {
-        var bl = blobs[s], db = Math.hypot(wx0 - bl[0], wy0 - bl[1]) * CELL / bl[3];
-        if (db < 3) { var hb = bl[2] * Math.exp(-Math.pow(db, bl[4])); e = Math.max(e, hb); }
-      }
-      var inland = Math.min(1, dc[k] * CELL / 50);
-      var rid = 0, am = 1, fr = 1; for (var o = 0; o < 3; o++) { rid += am * (1 - Math.abs(2 * vnoise(x / 6 * fr, y / 6 * fr, 200 + o) - 1)); am *= 0.5; fr *= 2.2; }
-      e = e + 30 + 120 * inland + inland * 420 * Math.pow(rid / 1.75, 2.2) * (0.5 + vnoise(x / 30, y / 30, 5));
-      e *= Math.min(1, 0.35 + dc[k] * CELL / 10);
-      e += (0.12 * e + 40) * fbm(x / 5, y / 5, 7) * 1.6;
-      elev[k] = Math.max(2, e);
-    }
-
-    // land cell list
-    var idx = new Int32Array(W * H).fill(-1), cells = [];
-    for (k = 0; k < W * H; k++) if (mask[k]) { idx[k] = cells.length; cells.push(k); }
-    var n = cells.length;
-    var gxA = new Int16Array(n), gyA = new Int16Array(n), lon = new Float32Array(n), lat = new Float32Array(n), el = new Float32Array(n), slope = new Float32Array(n),
-      dry = new Float32Array(n), coast = new Float32Array(n), si = new Uint8Array(n), lake = new Uint8Array(n), nb = new Int32Array(n * 8).fill(-1);
+    var gxA = new Int16Array(n), gyA = new Int16Array(n), lon = new Float32Array(n), lat = new Float32Array(n),
+      dry = new Float32Array(n), coast = new Float32Array(n), si = new Uint8Array(n), nb = new Int32Array(n * 8).fill(-1);
+    var maxSt = Math.ceil(90 / CELL), DD = [[-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1]];
+    var expT = new Float32Array(maxSt + 1); for (var st0 = 0; st0 <= maxSt; st0++) expT[st0] = Math.exp(-st0 * CELL / 70);
     for (i = 0; i < n; i++) {
-      k = cells[i]; x = k % W; y = (k / W) | 0; gxA[i] = x; gyA[i] = y; lon[i] = lonOf(x); lat[i] = latOf(y); el[i] = elev[k]; coast[i] = dc[k] * CELL;
-      var ex = (elev[k + 1] || 0) - (elev[k - 1] || 0), ey = (elev[k + W] || 0) - (elev[k - W] || 0);
-      slope[i] = Math.sqrt(ex * ex + ey * ey) / (2 * CELL * 1000); // m/m
-      var sh = 0; for (var st = 1; st <= 36; st++) { if (x - st < 0) break; var up = elev[k - st] - elev[k]; if (up > 0) sh = Math.max(sh, up * Math.exp(-st * CELL / 70)); }
+      k = cells[i]; x = k % W; y = (k / W) | 0; gxA[i] = x; gyA[i] = y; lon[i] = lonOf(x); lat[i] = latOf(y); coast[i] = dc[k];
+      // rain shadow: highest upwind (west) terrain within 90 km, discounted with distance
+      var sh = 0, e0 = elev[k];
+      for (var st = 1; st <= maxSt && x - st >= 0; st++) { var up = elev[k - st] - e0; if (up > 0) { var v = up * expT[st]; if (v > sh) sh = v; } }
       dry[i] = clamp(sh / 900, 0, 1);
-      var m = 0, dd = [[-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1]];
-      for (var q = 0; q < 8; q++) { var nx = x + dd[q][0], ny = y + dd[q][1]; if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue; var nk = ny * W + nx; if (mask[nk]) nb[i * 8 + (m++)] = idx[nk]; }
+      var m = 0;
+      for (var q = 0; q < 8; q++) { var nx = x + DD[q][0], ny = y + DD[q][1]; if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue; var nk = ny * W + nx; if (mask[nk]) nb[i * 8 + (m++)] = idx[nk]; }
     }
-    // islands: flood from Christchurch
+    // South Island: flood from Christchurch; offshore islands in the south/west join it
     var start = idx[Math.round(gyOf(-43.53)) * W + Math.round(gxOf(172.64))];
+    if (start < 0) for (i = 0; i < n; i++) if (Math.abs(lat[i] + 43.53) < 0.05 && Math.abs(lon[i] - 172.5) < 0.2) { start = i; break; }
     var stack = [start]; si[start] = 1;
     while (stack.length) { var c0 = stack.pop(); for (q = 0; q < 8; q++) { var c1 = nb[c0 * 8 + q]; if (c1 >= 0 && !si[c1]) { si[c1] = 1; stack.push(c1); } } }
     for (i = 0; i < n; i++) if (!si[i] && (lat[i] < -46.4 || (lat[i] < -40.75 && lon[i] < 174.45))) si[i] = 1;
-    // lakes
-    for (i = 0; i < n; i++) for (var l = 0; l < LAKES.length; l++) { var L = LAKES[l]; if (!L[2]) continue; var lx = (lon[i] - L[0]) * K / L[2], ly = (lat[i] - L[1]) * KY / L[3]; if (lx * lx + ly * ly < 1) lake[i] = 1; }
+
+    // observed land cover (LCDB), 4-bit codes, epoch-major
+    var obs = null, obsYears = grid.lcYears || null, lake = new Uint8Array(n);
+    if (grid.lc) {
+      var lb = b64bytes(grid.lc), ne = obsYears.length; obs = new Uint8Array(ne * n);
+      for (i = 0; i < ne * n; i++) obs[i] = (lb[i >> 1] >> ((i & 1) << 2)) & 15;
+      for (i = 0; i < n; i++) lake[i] = obs[i] === C.LAKE ? 1 : 0;
+    }
 
     function distTo(i, plon, plat) { var dx = (lon[i] - plon) * K, dy = (lat[i] - plat) * KY; return Math.sqrt(dx * dx + dy * dy); }
     function field(list, rad, wIdx) { var f = new Float32Array(n); for (var i = 0; i < n; i++) { var s = 0; for (var j = 0; j < list.length; j++) { var p = list[j], d = distTo(i, p[0], p[1]) / (rad || p[2]); if (d < 3) s += (wIdx != null ? p[wIdx] : 1) * Math.exp(-d * d); } f[i] = s; } return f; }
     var wetZ = field(WETZONES, null, null), maori = field(MAORI, 38, 2), gardens = field(MAORI, 7, 2);
     var plateau = field([[175.95, -39.15, 28], [176.6, -38.6, 22]], null, null);
 
-    // static per-town distances, protection year per cell
-    var tdist = TOWNS.map(function (t) { var a = new Float32Array(n); for (var i = 0; i < n; i++) a[i] = distTo(i, t[1], t[2]); return a; });
+    // towns: sparse lists of cells within TR km
+    var TR = 32, townCells = [], townDist = [];
+    TOWNS.forEach(function (t) {
+      var x0 = gxOf(t[1]), y0 = gyOf(t[2]), r = Math.ceil(TR / CELL) + 1, ci = [], cd = [];
+      for (var yy = Math.max(0, Math.floor(y0 - r)); yy <= Math.min(H - 1, Math.ceil(y0 + r)); yy++)
+        for (var xx = Math.max(0, Math.floor(x0 - r)); xx <= Math.min(W - 1, Math.ceil(x0 + r)); xx++) {
+          var j = idx[yy * W + xx]; if (j < 0) continue; var dd = distTo(j, t[1], t[2]); if (dd <= TR) { ci.push(j); cd.push(dd); }
+        }
+      townCells.push(Int32Array.from(ci)); townDist.push(Float32Array.from(cd));
+    });
     var protY = new Int16Array(n).fill(9999);
     for (i = 0; i < n; i++) for (var p = 0; p < PROTECT.length; p++) { var P = PROTECT[p]; if (distTo(i, P[0], P[1]) < P[2]) protY[i] = Math.min(protY[i], P[3]); }
-    function spots(list) { return list.map(function (s) { var a = new Float32Array(n); for (var i = 0; i < n; i++) { var d = distTo(i, s[0], s[1]) / s[2]; a[i] = d < 3 ? s[4] * Math.exp(-d * d) : 0; } return { y: s[3], f: a }; }); }
+    function spots(list) { return list.map(function (s) { var ci = [], cf = []; for (var i = 0; i < n; i++) { var d = distTo(i, s[0], s[1]) / s[2]; if (d < 2.6) { ci.push(i); cf.push(s[4] * Math.exp(-d * d)); } } return { y: s[3], i: Int32Array.from(ci), f: Float32Array.from(cf) }; }); }
 
-    var pn = [0, 1, 2, 3].map(function (o) { var f = new Float32Array(n); for (var i = 0; i < n; i++) f[i] = fbm(gxA[i] / 4.5, gyA[i] / 4.5, 300 + o * 17) * 2.4; return f; });
-    // hillshade
-    var shade = new Float32Array(W * H);
+    // spatially correlated noise, ~11 km features regardless of cell size
+    var pn = [0, 1, 2, 3].map(function (o) { var f = new Float32Array(n); for (var i = 0; i < n; i++) f[i] = fbm(gxA[i] * CELL / 11, gyA[i] * CELL / 11, 300 + o * 17) * 2.4; return f; });
+
+    // neighbourhood share of each observed natural class in the first LCDB epoch (~8 km box blur)
+    var near = null;
+    if (obs) {
+      near = {};
+      var r = Math.max(1, Math.round(8 / CELL)), tmp = new Float32Array(WH), cntm = new Float32Array(WH);
+      for (i = 0; i < n; i++) cntm[cells[i]] = 1;
+      boxBlur(cntm, tmp, W, H, r);
+      [C.NAT, C.TUSS, C.WET, C.SCRUB].forEach(function (c) {
+        var g = new Float32Array(WH);
+        for (var i = 0; i < n; i++) g[cells[i]] = obs[i] === c ? 1 : 0;
+        boxBlur(g, tmp, W, H, r);
+        var f = new Float32Array(n); for (i = 0; i < n; i++) f[i] = g[cells[i]] / Math.max(1e-6, cntm[cells[i]]);
+        near[c] = f;
+      });
+    }
+
+    // static terrain terms used in suitability scores
+    var flatA = new Float32Array(n), lowA = new Float32Array(n), hillA = new Float32Array(n);
+    for (i = 0; i < n; i++) { flatA[i] = clamp(1 - (sl[i] - 2) / 12, 0, 1); lowA[i] = clamp(1 - el[i] / 700, 0, 1); hillA[i] = clamp((sl[i] - 5) / 12, 0, 1) * (el[i] < 900 ? 1 : 0); }
+
+    // hillshade from the DEM (light from the north-west)
+    var shade = new Float32Array(WH), ex = 2.2 + 1.6 * CELL;
     for (y = 1; y < H - 1; y++) for (x = 1; x < W - 1; x++) { k = y * W + x; if (!mask[k]) continue;
-      var dzx = (elev[k + 1] - elev[k - 1]) / (2 * CELL * 1000) * 6, dzy = (elev[k + W] - elev[k - W]) / (2 * CELL * 1000) * 6;
-      var nzv = 1 / Math.sqrt(dzx * dzx + dzy * dzy + 1); shade[k] = clamp((-dzx * -0.6 + -dzy * -0.6 + 0.53) * nzv / 1.0, 0, 1.2); }
+      var dzx = (elev[k + 1] - elev[k - 1]) / (2 * CELL * 1000) * ex, dzy = (elev[k + W] - elev[k - W]) / (2 * CELL * 1000) * ex;
+      var nzv = 1 / Math.sqrt(dzx * dzx + dzy * dzy + 1); shade[k] = clamp((dzx * 0.6 + dzy * 0.6 + 0.53) * nzv, 0, 1.2); }
 
-    return { W: W, H: H, CELL: CELL, K: K, KY: KY, n: n, cells: cells, idx: idx, gx: gxA, gy: gyA, lon: lon, lat: lat, el: el, slope: slope, dry: dry, coast: coast,
-      si: si, lake: lake, nb: nb, wetZ: wetZ, maori: maori, gardens: gardens, plateau: plateau, tdist: tdist, protY: protY, shade: shade, pn: pn,
-      cropSpots: spots(CROPSPOTS), pineSpots: spots(PINESPOTS), gxOf: gxOf, gyOf: gyOf };
+    return { W: W, H: H, CELL: CELL, K: K, KY: KY, n: n, cells: cells, idx: idx, gx: gxA, gy: gyA, lon: lon, lat: lat, el: el, sl: sl, dry: dry, coast: coast,
+      si: si, lake: lake, nb: nb, flat: flatA, low: lowA, hill: hillA, wetZ: wetZ, maori: maori, gardens: gardens, plateau: plateau, townCells: townCells, townDist: townDist, protY: protY, shade: shade, pn: pn,
+      cropSpots: spots(CROPSPOTS), pineSpots: spots(PINESPOTS), gxOf: gxOf, gyOf: gyOf, obs: obs, obsYears: obsYears, near: near, distTo: distTo };
+  }
+
+  // separable box blur, two passes of each (approximates a Gaussian); g in place, t scratch
+  function boxBlur(g, t, W, H, r) {
+    for (var pass = 0; pass < 2; pass++) {
+      var x, y, s, k;
+      for (y = 0; y < H; y++) { s = 0; k = y * W;
+        for (x = -r; x <= r; x++) if (x >= 0 && x < W) s += g[k + x];
+        for (x = 0; x < W; x++) { t[k + x] = s; var xa = x + r + 1, xr = x - r; if (xa < W) s += g[k + xa]; if (xr >= 0) s -= g[k + xr]; } }
+      for (x = 0; x < W; x++) { s = 0;
+        for (y = -r; y <= r; y++) if (y >= 0 && y < H) s += t[y * W + x];
+        for (y = 0; y < H; y++) { g[y * W + x] = s; var ya = y + r + 1, yr = y - r; if (ya < H) s += t[ya * W + x]; if (yr >= 0) s -= t[yr * W + x]; } }
+    }
   }
 
   // ---------- selection: top-k by potential (bucketed, O(n)) ----------
@@ -230,115 +230,270 @@ var NZModel = (function () {
     return out;
   }
 
+  // comparison classes for agreement: grassland is one class (LCDB cannot tell dairy from sheep & beef)
+  function cmpClass(c) { return c === C.DAIRY || c === HPG ? C.SHEEP : c; }
+  function agreement(a, b, n) {
+    var M = new Float64Array(144), i, same = 0;
+    for (i = 0; i < n; i++) { var p = cmpClass(a[i]), o = cmpClass(b[i]); M[p * 12 + o]++; if (p === o) same++; }
+    var pe = 0; for (var c = 0; c < 12; c++) { var r = 0, s = 0; for (var j = 0; j < 12; j++) { r += M[c * 12 + j]; s += M[j * 12 + c]; } pe += r * s; }
+    pe /= n * n; var po = same / n;
+    return { pc: po * 100, kappa: (po - pe) / (1 - pe) };
+  }
+
   // ---------- run ----------
   function run(S, params, onDone, onProgress) {
     params = params || {};
+    if (!S.obs) throw new Error('grid has no LCDB land cover');
     var seed = params.seed || 1, cn = params.contagion == null ? 1 : params.contagion, sig = params.noise == null ? 0.35 : params.noise, acw = params.access == null ? 1 : params.access;
+    var anchor = params.anchor !== false;
     var rnd = mulberry(seed * 9973 + 17);
     function gauss() { return (rnd() + rnd() + rnd() - 1.5) * 1.15; }
-    var n = S.n, cls = new Uint8Array(n), nbA = S.nb, years = Y1 - Y0 + 1;
-    var snaps = new Uint8Array(years * n), counts = [], clearY = new Int16Array(n), origin = new Uint8Array(n), townOf = new Int16Array(n).fill(-1);
-    var cand = new Int32Array(n), pot = new Float32Array(n);
-    function frac(i, test) { var c = 0, o = i * 8; for (var q = 0; q < 8; q++) { var j = nbA[o + q]; if (j >= 0 && test[cls[j]]) c++; else if (j < 0) c += 0.25; } return c / 8; }
-    function setOf(arr) { var t = new Uint8Array(12); arr.forEach(function (v) { t[v] = 1; }); return t; }
-    var DEV = setOf([C.SHEEP, C.DAIRY, C.CROP, C.URB, C.SCRUB, C.PINE]), IS = []; for (var c = 0; c < 12; c++) IS.push(setOf([c]));
+    var n = S.n, nbA = S.nb, years = Y1 - Y0 + 1, obs = S.obs, OY = S.obsYears, NE = OY.length, E0 = OY[0];
+    var cls = new Uint8Array(n), cnt = new Int32Array(12);
+    var snaps = new Uint8Array(years * n), counts = [], clearY = new Int16Array(n), origin = new Uint8Array(n);
+    var cand = new Int32Array(n), pot = new Float32Array(n), i, c, t;
+    var dest = obs.subarray(0, n), cur = new Uint8Array(n);            // cur: observed code currently in force (after E0)
+    cnt[0] = n;
+    var fernLeft = 0;                                                   // scrub cells whose 1996 class is not scrub
+    function setC(i, c) { if (dest[i] !== C.SCRUB) { if (cls[i] === C.SCRUB) fernLeft--; if (c === C.SCRUB) fernLeft++; } cnt[cls[i]]--; cnt[c]++; cls[i] = c; }
+    function frac(i, test) { var s = 0, o = i * 8; for (var q = 0; q < 8; q++) { var j = nbA[o + q]; if (j >= 0) { if (test[cls[j]]) s++; } else s += 0.25; } return s / 8; }
+    function setOf(arr) { var t = new Uint8Array(13); arr.forEach(function (v) { t[v] = 1; }); return t; }
+    var DEV = setOf([C.SHEEP, C.DAIRY, C.CROP, C.URB, C.SCRUB, C.PINE]), GRASS = setOf([C.SHEEP, C.DAIRY]), IS = []; for (c = 0; c < 13; c++) IS.push(setOf([c]));
+    var T_PINE = setOf([C.SHEEP, C.SCRUB, C.TUSS]), T_PINEN = setOf([C.SHEEP, C.SCRUB, C.TUSS, C.NAT]), T_CROP = setOf([C.SHEEP, C.SCRUB, C.TUSS, C.DAIRY]);
+    var T_DAIRYF = setOf([C.SHEEP, C.SCRUB, C.CROP]), T_DAIRYF2 = setOf([C.SHEEP, C.SCRUB, C.CROP, C.TUSS]), T_DAIRYF3 = setOf([C.SHEEP, C.SCRUB, C.CROP, C.TUSS, C.PINE]);
+    function okDest(i, c) { if (!anchor) return true; var d = dest[i]; return c === C.SHEEP ? (d === C.SHEEP || d === HPG) : c === C.DAIRY ? d === HPG : d === c; }
+
+    // observed totals per epoch, by code
+    var oc = []; for (var e = 0; e < NE; e++) { var cc = new Int32Array(13); for (i = 0; i < n; i++) cc[obs[e * n + i]]++; oc.push(cc); }
+    var total = n - oc[0][C.LAKE];
+    var FL = S.flat, LO = S.low, HI = S.hill;
+    var flat = function (i) { return FL[i]; }, low = function (i) { return LO[i]; }, hill = function (i) { return HI[i]; };
 
     // ---- initial 1840 state ----
-    var i, total = 0;
-    for (i = 0; i < n; i++) { if (S.lake[i]) cls[i] = C.LAKE; else total++; }
-    function initPick(frac0, from, score) {
-      var m = 0; for (var i = 0; i < n; i++) if (cls[i] === from) { cand[m] = i; pot[m] = score(i); m++; }
-      var got = pickTop(cand, pot, m, Math.round(frac0 * total)); return got;
+    var nALP = oc[0][C.ALP], nNAT0 = Math.round(FOREST1840 * total);
+    var nWET0 = Math.round(Math.min(0.035 * total, Math.max(oc[0][C.WET] * 1.5, oc[NE - 1][C.WET] / WET_REMAIN)));
+    var nTUSS0 = Math.max(Math.round(TUSS1840 * total), oc[0][C.TUSS]);
+    var nGard = Math.round(GARDENS1840 * total);
+    var nSCRUB0 = total - nALP - nNAT0 - nWET0 - nTUSS0 - nGard;
+    var ir = mulberry(4242 + seed);
+    function initPick(k, test, score) {
+      var m = 0; for (var i = 0; i < n; i++) if (cls[i] === 0 && test(i)) { cand[m] = i; pot[m] = score(i); m++; }
+      return pickTop(cand, pot, m, Math.max(0, k));
     }
-    var ir = mulberry(4242);
-    initPick(0.08, 0, function (i) { return S.el[i] - (1550 - Math.max(0, -38 - S.lat[i]) * 50); }).forEach(function (i) { cls[i] = C.ALP; });
-    initPick(0.025, 0, function (i) { return S.wetZ[i] * 1.5 - S.el[i] / 60 - S.slope[i] * 40 + (S.coast[i] < 3 ? -0.3 : 0) + ir() * 0.6; }).forEach(function (i) { cls[i] = C.WET; });
-    initPick(0.215, 0, function (i) { return (S.si[i] ? S.dry[i] * 2 + 0.6 : -2) + S.plateau[i] * 1.8 - Math.abs(S.el[i] - 500) / 900 + ir() * 0.5 - (S.si[i] && S.lon[i] > 172.7 && S.lat[i] < -43.6 && S.lat[i] > -43.9 && S.el[i] > 200 ? 3 : 0); }).forEach(function (i) { cls[i] = C.TUSS; });
-    initPick(0.0025, 0, function (i) { return S.gardens[i] - S.slope[i] * 20 - S.el[i] / 300 + ir() * 0.3; }).forEach(function (i) { cls[i] = C.CROP; origin[i] = 1; });
-    initPick(0.15, 0, function (i) { return S.maori[i] * (S.si[i] ? 0.5 : 1) - Math.max(0, S.el[i] - 250) / 300 + S.plateau[i] * 0.6 + ir() * 0.45; }).forEach(function (i) { cls[i] = C.SCRUB; });
-    for (i = 0; i < n; i++) if (cls[i] === 0) cls[i] = C.NAT;
-    var base = { NAT: 0, WET: 0, TUSS: 0 };
-    for (i = 0; i < n; i++) { if (cls[i] === C.NAT) base.NAT++; if (cls[i] === C.WET) base.WET++; if (cls[i] === C.TUSS) base.TUSS++; }
-    // urban seeds
-    var dmin = new Float32Array(n).fill(1e9), active = new Uint8Array(S.tdist.length);
+    var yes = function () { return true; };
+    for (i = 0; i < n; i++) if (S.lake[i]) setC(i, C.LAKE);
+    var nr = S.near;
+    if (anchor) {
+      // natural cover still present in the first LCDB epoch is assumed present in 1840
+      for (i = 0; i < n; i++) { c = dest[i]; if (c === C.NAT || c === C.TUSS || c === C.WET || c === C.ALP) setC(i, c); }
+      initPick(nWET0 - cnt[C.WET], yes, function (i) { return 2.2 * nr[C.WET][i] + 1.3 * S.wetZ[i] + 0.9 * flat(i) + 0.7 * low(i) - S.sl[i] / 6 + (dest[i] === HPG ? 0.25 : 0) + ir() * 0.5; }).forEach(function (i) { setC(i, C.WET); });
+      initPick(nGard, yes, function (i) { return S.gardens[i] + 0.4 * flat(i) - S.el[i] / 300 + (dest[i] === C.CROP ? 0.3 : 0) + ir() * 0.3; }).forEach(function (i) { setC(i, C.CROP); origin[i] = 1; });
+      initPick(nTUSS0 - cnt[C.TUSS], yes, function (i) { return 3.2 * nr[C.TUSS][i] - 1.6 * nr[C.NAT][i] + (S.si[i] ? 1.6 * S.dry[i] + 0.3 : -0.6) + 1.4 * S.plateau[i] - Math.abs(S.el[i] - 500) / 1400 + ir() * 0.5; }).forEach(function (i) { setC(i, C.TUSS); });
+      initPick(nSCRUB0, yes, function (i) { return 1.1 * S.maori[i] * (S.si[i] ? 0.5 : 1) + 1.3 * nr[C.SCRUB][i] + (dest[i] === C.SCRUB ? 0.5 : 0) - 1.2 * nr[C.NAT][i] + 0.5 * S.plateau[i] - Math.max(0, S.el[i] - 300) / 500 + ir() * 0.5; }).forEach(function (i) { setC(i, C.SCRUB); });
+    } else {
+      initPick(nALP, yes, function (i) { return S.el[i] - (1550 - Math.max(0, -38 - S.lat[i]) * 50) + 4 * S.sl[i]; }).forEach(function (i) { setC(i, C.ALP); });
+      initPick(nWET0, yes, function (i) { return 1.5 * S.wetZ[i] + flat(i) + 0.8 * low(i) - S.sl[i] / 5 - (S.coast[i] < 3 ? 0.3 : 0) + ir() * 0.6; }).forEach(function (i) { setC(i, C.WET); });
+      initPick(nTUSS0, yes, function (i) { return (S.si[i] ? 2 * S.dry[i] + 0.6 : -2) + 1.8 * S.plateau[i] - Math.abs(S.el[i] - 600) / 900 + ir() * 0.5 - (S.si[i] && S.lon[i] > 172.7 && S.lat[i] < -43.6 && S.lat[i] > -43.9 && S.el[i] > 200 ? 3 : 0); }).forEach(function (i) { setC(i, C.TUSS); });
+      initPick(nGard, yes, function (i) { return S.gardens[i] - S.sl[i] / 10 - S.el[i] / 300 + ir() * 0.3; }).forEach(function (i) { setC(i, C.CROP); origin[i] = 1; });
+      initPick(nSCRUB0, yes, function (i) { return S.maori[i] * (S.si[i] ? 0.5 : 1) - Math.max(0, S.el[i] - 250) / 300 + 0.6 * S.plateau[i] + ir() * 0.45; }).forEach(function (i) { setC(i, C.SCRUB); });
+    }
+    for (i = 0; i < n; i++) if (cls[i] === 0) setC(i, C.NAT);
+    var N0 = { 1: cnt[C.NAT], 4: cnt[C.WET], 3: cnt[C.TUSS] }, CURVE = { 1: 'NAT', 4: 'WET', 3: 'TUSS', 8: 'PINE', 9: 'CROP', 10: 'URB' };
+    var fern0 = fernLeft;
 
-    function target(name, yr) { var v = interp(DEM[name], yr); if (name === 'NAT' || name === 'WET' || name === 'TUSS') return Math.round(v * base[name]); return Math.round(v / 100 * total); }
-    function countOf(c) { var s = 0; for (var i = 0; i < n; i++) if (cls[i] === c) s++; return s; }
-    function convert(list, to, yr) { for (var j = 0; j < list.length; j++) { var i = list[j]; if ((cls[i] === C.NAT || cls[i] === C.WET) && !clearY[i]) clearY[i] = yr; cls[i] = to; } }
-    function gather(test, score, pf) { var f = S.pn[pf || 0], pw = sig * 2.2; var m = 0; for (var i = 0; i < n; i++) if (test(cls[i], i)) { cand[m] = i; pot[m] = score(i) + gauss() * sig + f[i] * pw; m++; } return m; }
+    // ---- national targets ----
+    function obsCount(c, y) {                     // LCDB totals, linear between epochs, held after the last
+      var code = c === C.SHEEP ? -1 : c;
+      function at(e) { return code < 0 ? oc[e][C.SHEEP] + oc[e][HPG] : oc[e][code]; }
+      if (y >= OY[NE - 1]) return at(NE - 1);
+      for (var e = 0; e < NE - 1; e++) if (y <= OY[e + 1]) return at(e) + (at(e + 1) - at(e)) * (y - OY[e]) / (OY[e + 1] - OY[e]);
+      return at(0);
+    }
+    function tgt(c, y) {
+      if (y >= E0) return Math.round(obsCount(c, y));
+      var nm = CURVE[c];
+      if (c === C.NAT || c === C.WET || c === C.TUSS) { var r = interp(DEM[nm], y), r0 = interp(DEM[nm], E0); return Math.round(N0[c] - (1 - r) / (1 - r0) * (N0[c] - oc[0][c])); }
+      return Math.round(oc[0][c] * interp(DEM[nm], y) / interp(DEM[nm], E0));
+    }
+    function tgtDairy(y) { var v = Math.round(interp(DEM.DAIRY, y) / 100 * total); return Math.min(v, Math.round(0.8 * (y >= E0 ? obsCount(HPG, y) : oc[0][HPG]))); }
+    function obsCountHPG(y) { return obsCount(HPG, y); }
+    var sf0 = oc[0][C.SCRUB] / Math.max(1, oc[0][C.SCRUB] + oc[0][C.SHEEP] + oc[0][HPG] - tgtDairy(E0));
+    var SF = DEM.SCRUBF.concat([[E0, sf0]]);
+
+    // ---- town footprints (anchored: each 1996 urban cell belongs to its nearest town) ----
+    var NT = TOWNS.length, foot = [], footCount = new Int32Array(NT + 1), townOf = new Int16Array(n).fill(-1);
+    if (anchor) {
+      var lists = []; for (t = 0; t <= NT; t++) lists.push([]);
+      for (i = 0; i < n; i++) if (dest[i] === C.URB) {
+        var best = NT, bd = 30;
+        for (t = 0; t < NT; t++) { var d = S.distTo(i, TOWNS[t][1], TOWNS[t][2]) / Math.pow(Math.max(1, TOWNS[t][4][3]), 0.15); if (d < bd && TOWNS[t][3] < E0) { bd = d; best = t; } }
+        lists[best].push(i);
+      }
+      for (t = 0; t <= NT; t++) { foot.push(Int32Array.from(lists[t])); footCount[t] = lists[t].length; }
+    }
     function townPop(t, yr) { var p = t[4]; if (yr < t[3]) return 0; return Math.max(0.05, interp([[t[3], Math.min(p[0], 0.3) || 0.05], [1860, p[0]], [1900, p[1]], [1950, p[2]], [2020, p[3]], [2025, p[3] * 1.03]].filter(function (k, ix) { return ix === 0 || k[0] > t[3]; }), yr)); }
 
-    var yr = Y0;
-    function step() {
-      // activate towns
-      for (var t = 0; t < S.tdist.length; t++) if (!active[t] && yr >= TOWNS[t][3]) { active[t] = 1; var dd = S.tdist[t]; for (var i = 0; i < n; i++) if (dd[i] < dmin[i]) dmin[i] = dd[i]; }
-      var Ls = 12 + 90 * sstep(1845, 1935, yr) + 40 * sstep(1950, 1990, yr);
-      var A = function (i) { return acw * Math.exp(-dmin[i] / Ls) + (S.coast[i] < 8 ? 0.25 * (1 - sstep(1860, 1920, yr)) : 0); };
-      var flat = function (i) { return clamp(1 - S.slope[i] / 0.12, 0, 1); };
-      var low = function (i) { return clamp(1 - S.el[i] / 700, 0, 1); };
-      var irr = sstep(1985, 2015, yr);
-      var m, got, need;
+    // ---- transitions between LCDB epochs (anchored) ----
+    var pend = new Uint8Array(n), trans = [];
+    for (e = 0; e < NE - 1; e++) { var L = []; for (i = 0; i < n; i++) if (obs[e * n + i] !== obs[(e + 1) * n + i]) L.push(i); trans.push(Int32Array.from(L)); }
+    function dispOf(code, prev) { return code === HPG ? (prev === C.DAIRY ? C.DAIRY : C.SHEEP) : code; }
 
-      if (yr > Y0) {
-        // 1. urban, per town
-        var tot = target('URB', yr), pops = [], ps = 0;
-        for (t = 0; t < TOWNS.length; t++) { var pp = active[t] ? Math.pow(townPop(TOWNS[t], yr), 0.9) : 0; pops.push(pp); ps += pp; }
-        var have = new Int32Array(TOWNS.length); for (i = 0; i < n; i++) if (cls[i] === C.URB && townOf[i] >= 0) have[townOf[i]]++;
-        for (t = 0; t < TOWNS.length; t++) {
-          var want = Math.round(tot * pops[t] / ps) - have[t]; if (want <= 0) continue;
-          var dd2 = S.tdist[t], rad = 4 + 2.2 * Math.sqrt(have[t] + want);
-          m = 0; for (i = 0; i < n; i++) { if (dd2[i] > rad * 2.5 + 5 || cls[i] === C.URB || cls[i] === C.LAKE || cls[i] === C.ALP) continue; cand[m] = i; pot[m] = 2.2 * cn * frac(i, IS[C.URB]) - dd2[i] / rad + 0.6 * flat(i) - (cls[i] === C.NAT ? 0.3 : 0) + gauss() * sig * 0.8; m++; }
-          got = pickTop(cand, pot, m, want); convert(got, C.URB, yr); got.forEach(function (i) { townOf[i] = t; });
-        }
-        // 2. native forest clearance
-        need = countOf(C.NAT) - target('NAT', yr);
-        if (need > 0) { m = gather(function (c, i) { return c === C.NAT && S.protY[i] > yr; }, function (i) { return 1.3 * A(i) + 1.1 * cn * frac(i, DEV) + 0.7 * flat(i) + 0.7 * low(i) + (S.si[i] ? -0.35 : 0.15) - (S.si[i] && S.dry[i] < 0.1 && S.lon[i] < 171.8 ? 0.6 : 0); });
-          convert(pickTop(cand, pot, m, need), C.SHEEP, yr); }
-        // 3. wetland drainage
-        need = countOf(C.WET) - target('WET', yr);
-        if (need > 0) { m = gather(function (c) { return c === C.WET; }, function (i) { return 1.4 * A(i) + 1.0 * cn * frac(i, DEV); }); convert(pickTop(cand, pot, m, need), C.SHEEP, yr); }
-        // 4. tussock improvement
-        need = countOf(C.TUSS) - target('TUSS', yr);
-        if (need > 0) { m = gather(function (c) { return c === C.TUSS; }, function (i) { return A(i) + 0.8 * flat(i) + 1.2 * low(i) + 0.8 * cn * frac(i, IS[C.SHEEP]) + S.plateau[i] * 0.4; }); convert(pickTop(cand, pot, m, need), C.SHEEP, yr); }
-        // 5. Māori gardens alienated
-        if (yr >= 1850 && yr <= 1900) for (i = 0; i < n; i++) if (origin[i] === 1 && cls[i] === C.CROP && rnd() < 0.06) { cls[i] = C.SHEEP; origin[i] = 0; }
-        // 6. dairy
-        need = target('DAIRY', yr) - countOf(C.DAIRY);
-        var dSuit = function (i) { var wetOK = 1 - S.dry[i] * (1 - irr); return 1.6 * flat(i) * low(i) * (0.4 + wetOK) + 1.2 * cn * frac(i, IS[C.DAIRY]) + 0.5 * A(i) - (S.si[i] ? 0.45 * (1 - irr) - 0.35 * irr : 0) + (S.el[i] > 500 ? -1 : 0) - (S.lat[i] > -36.2 ? 0.4 * sstep(1950, 1990, yr) : 0); };
-        if (need > 0) { m = gather(function (c) { return c === C.SHEEP || c === C.SCRUB || c === C.CROP || (irr > 0.2 && c === C.TUSS) || (yr > 2003 && c === C.PINE); }, function (i) { return dSuit(i) + (cls[i] === C.PINE ? -0.2 : 0); }, 1); convert(pickTop(cand, pot, m, need), C.DAIRY, yr); }
-        else if (need < 0) { m = gather(function (c) { return c === C.DAIRY; }, function (i) { return -dSuit(i); }); convert(pickTop(cand, pot, m, -need), C.SHEEP, yr); }
-        // 7. cropping & horticulture
-        need = target('CROP', yr) - countOf(C.CROP);
-        var cSuit = function (i) { var s = 0; for (var q = 0; q < S.cropSpots.length; q++) { var sp = S.cropSpots[q]; if (yr >= sp.y) s += sp.f[i] * sstep(sp.y, sp.y + 25, yr); } return 1.2 * flat(i) * low(i) * (0.6 + 0.6 * S.dry[i]) + 1.3 * s + 1.0 * cn * frac(i, IS[C.CROP]) + 0.4 * A(i); };
-        if (need > 0) { m = gather(function (c, i) { return (c === C.SHEEP || c === C.SCRUB || c === C.TUSS || c === C.DAIRY) && origin[i] !== 1; }, cSuit); convert(pickTop(cand, pot, m, need), C.CROP, yr); }
-        else if (need < 0) { m = gather(function (c, i) { return c === C.CROP; }, function (i) { return -cSuit(i) + (origin[i] === 1 ? -2 : 0); }); var gl = pickTop(cand, pot, m, -need); convert(gl, C.SHEEP, yr); gl.forEach(function (i) { origin[i] = 0; }); }
-        // 8. plantation forestry
-        need = target('PINE', yr) - countOf(C.PINE);
-        var pSuit = function (i) { var s = 0; for (var q = 0; q < S.pineSpots.length; q++) { var sp = S.pineSpots[q]; if (yr >= sp.y) s += sp.f[i] * sstep(sp.y, sp.y + 15, yr); } var hill = clamp(S.slope[i] / 0.08, 0, 1) * (S.el[i] < 900 ? 1 : 0); return 1.4 * s + 0.95 * hill * sstep(1960, 1990, yr) + 1.4 * cn * frac(i, IS[C.PINE]) - (S.el[i] > 1000 ? 2 : 0) - 0.4 * flat(i) * low(i); };
-        if (need > 0) { m = gather(function (c, i) { return c === C.SHEEP || c === C.SCRUB || c === C.TUSS || (c === C.NAT && yr > 1955 && yr < 1985 && S.protY[i] > yr); }, function (i) { return pSuit(i) + (cls[i] === C.NAT ? -0.5 : 0) + (cls[i] === C.SCRUB ? 0.2 : 0); }, 2); convert(pickTop(cand, pot, m, need), C.PINE, yr); }
-        else if (need < 0) { m = gather(function (c) { return c === C.PINE; }, function (i) { return -pSuit(i) + dSuit(i) * 0.5; }); convert(pickTop(cand, pot, m, -need), C.SHEEP, yr); }
-        // 9. sheep & beef balance against scrub
-        need = target('SHEEP', yr) - countOf(C.SHEEP);
-        var keep = function (i) { return 1.2 * flat(i) + 1.0 * low(i) + A(i) + 0.8 * cn * frac(i, IS[C.SHEEP]) - (S.si[i] && S.dry[i] < 0.1 ? 0.3 : 0); };
-        if (need > 0) { m = gather(function (c) { return c === C.SCRUB; }, keep, 3); convert(pickTop(cand, pot, m, need), C.SHEEP, yr); }
-        else if (need < 0) { m = gather(function (c) { return c === C.SHEEP; }, function (i) { return -keep(i) + 0.6 * cn * frac(i, IS[C.SCRUB]); }, 3); convert(pickTop(cand, pot, m, -need), C.SCRUB, yr); }
-      } else {
-        // 1840 urban seeds
-        [0, 2].forEach(function (t) { var dd = S.tdist[t], best = -1, bd = 1e9; for (var i = 0; i < n; i++) if (dd[i] < bd && cls[i] !== C.LAKE) { bd = dd[i]; best = i; } cls[best] = C.URB; townOf[best] = t; });
-      }
-      snaps.set(cls, (yr - Y0) * n);
-      var cc = new Int32Array(12); for (i = 0; i < n; i++) cc[cls[i]]++; counts.push(cc);
+    var dmin = new Float32Array(n).fill(1e9), active = new Uint8Array(NT), cropF = new Float32Array(n), pineF = new Float32Array(n);
+    var cropW = new Float32Array(S.cropSpots.length), pineW = new Float32Array(S.pineSpots.length);
+    var snapped = 0, yr = Y0;
+    // gather candidates (class table ts, optional predicate dfn), then score them. When only
+    // `need` cells are wanted from a much larger pool, score a random subset of >= KS*need.
+    var NTAB = 1 << 20, noiseT = new Float32Array(NTAB); for (i = 0; i < NTAB; i++) noiseT[i] = gauss();
+    var KS = 30, MINC = Math.max(4000, (n / 12) | 0);
+    function gather(ts, dfn, score, pf, need) {
+      var m = 0, i, j;
+      if (dfn) { for (i = 0; i < n; i++) if (ts[cls[i]] && dfn(i)) cand[m++] = i; }
+      else for (i = 0; i < n; i++) if (ts[cls[i]]) cand[m++] = i;
+      var cap = Math.max(MINC, need * KS);
+      if (m > cap) { for (j = 0; j < cap; j++) { var r = j + ((rnd() * (m - j)) | 0), tmp = cand[j]; cand[j] = cand[r]; cand[r] = tmp; } m = cap; }
+      var f = S.pn[pf || 0], pw = sig * 2.2, off = (rnd() * NTAB) | 0;
+      for (j = 0; j < m; j++) { i = cand[j]; pot[j] = score(i) + noiseT[(off + j) & (NTAB - 1)] * sig + f[i] * pw; }
+      return m;
     }
+    function convert(list, to) { for (var j = 0; j < list.length; j++) { var i = list[j]; if ((cls[i] === C.NAT || cls[i] === C.WET) && !clearY[i] && to !== C.NAT && to !== C.WET) clearY[i] = yr; setC(i, to); } }
+    function spotUpdate(sp, wArr, F, ramp) {
+      for (var q = 0; q < sp.length; q++) { var w = yr >= sp[q].y ? sstep(sp[q].y, sp[q].y + ramp, yr) : 0, dw = w - wArr[q]; if (!dw) continue; wArr[q] = w; var ii = sp[q].i, ff = sp[q].f; for (var j = 0; j < ii.length; j++) F[ii[j]] += dw * ff[j]; }
+    }
+
+    function step() {
+      var y = yr, m, need, got;
+      for (t = 0; t < NT; t++) if (!active[t] && y >= TOWNS[t][3]) { active[t] = 1; for (i = 0; i < n; i++) { var dd = S.distTo(i, TOWNS[t][1], TOWNS[t][2]); if (dd < dmin[i]) dmin[i] = dd; } }
+      if (y === Y0) { // 1840 urban seeds
+        [1, 2].forEach(function (t) { var tc = S.townCells[t], td = S.townDist[t], bi = -1, bd = 1e9; for (var j = 0; j < tc.length; j++) if (td[j] < bd && cls[tc[j]] !== C.LAKE && okDest(tc[j], C.URB)) { bd = td[j]; bi = tc[j]; } if (bi >= 0) { setC(bi, C.URB); townOf[bi] = t; } });
+        return;
+      }
+      spotUpdate(S.cropSpots, cropW, cropF, 25); spotUpdate(S.pineSpots, pineW, pineF, 15);
+      var Ls = 12 + 90 * sstep(1845, 1935, y) + 40 * sstep(1950, 1990, y);
+      var coastB = 0.25 * (1 - sstep(1860, 1920, y)), CO = S.coast;
+      var A = function (i) { var d = dmin[i]; return acw * Math.exp(-d / Ls) + (CO[i] < 8 ? coastB : 0); };
+      var irr = sstep(1985, 2015, y);
+      var dSuit = function (i) { var wetOK = 1 - S.dry[i] * (1 - irr); return 1.6 * flat(i) * low(i) * (0.4 + wetOK) + 1.2 * cn * frac(i, IS[C.DAIRY]) + 0.5 * A(i) - (S.si[i] ? 0.45 * (1 - irr) - 0.35 * irr : 0) + (S.el[i] > 500 ? -1 : 0) - (S.lat[i] > -36.2 ? 0.4 * sstep(1950, 1990, y) : 0); };
+      var hpNow = function (i) { return y > E0 ? cur[i] === HPG : dest[i] === HPG; };
+
+      if (anchor && y > E0) {
+        // observed era: spread each LCDB change over its interval, nearest-neighbour first
+        var e = 0; while (e < NE - 1 && y > OY[e + 1]) e++;
+        if (e < NE - 1) {
+          var Lst = trans[e], A0 = OY[e], B0 = OY[e + 1], done = 0, left = 0;
+          if (y === A0 + 1) for (var j = 0; j < Lst.length; j++) pend[Lst[j]] = 1;
+          for (j = 0; j < Lst.length; j++) if (pend[Lst[j]]) left++;
+          var want = Math.round(Lst.length * (y - A0) / (B0 - A0)) - (Lst.length - left);
+          if (want > 0) {
+            m = 0; var f3 = S.pn[3];
+            for (j = 0; j < Lst.length; j++) { i = Lst[j]; if (!pend[i]) continue; var to = obs[(e + 1) * n + i], ts = to === HPG ? GRASS : IS[to]; cand[m] = i; pot[m] = 1.6 * cn * frac(i, ts) + f3[i] * sig * 2.2 + noiseT[(m * 7 + y * 131) & (NTAB - 1)] * sig; m++; }
+            got = pickTop(cand, pot, m, want);
+            for (j = 0; j < got.length; j++) { i = got[j]; pend[i] = 0; var code = obs[(e + 1) * n + i]; cur[i] = code; var nc = dispOf(code, cls[i]); if ((cls[i] === C.NAT || cls[i] === C.WET) && !clearY[i] && nc !== C.NAT && nc !== C.WET) clearY[i] = y; setC(i, nc); }
+          }
+        }
+        dairyStep();
+        return;
+      }
+
+      // 1. urban
+      if (anchor) {
+        for (t = 0; t <= NT; t++) {
+          if (!footCount[t]) continue;
+          var g = t < NT ? Math.min(1, Math.pow(townPop(TOWNS[t], y) / Math.max(0.05, townPop(TOWNS[t], E0)), 0.9)) : interp(DEM.URB, y) / interp(DEM.URB, E0);
+          var fp = foot[t], have = 0; for (j = 0; j < fp.length; j++) if (cls[fp[j]] === C.URB) have++;
+          need = (y === E0 ? fp.length : Math.round(fp.length * g)) - have; if (need <= 0) continue;
+          var tx = t < NT ? TOWNS[t][1] : 0, ty = t < NT ? TOWNS[t][2] : 0, rad = 2 + 1.25 * Math.sqrt(fp.length * S.CELL * S.CELL);
+          m = 0; for (j = 0; j < fp.length; j++) { i = fp[j]; if (cls[i] === C.URB) continue; cand[m] = i; pot[m] = 2.2 * cn * frac(i, IS[C.URB]) - (t < NT ? S.distTo(i, tx, ty) / rad : -A(i)) + 0.6 * flat(i) + gauss() * sig * 0.8; m++; }
+          convert(pickTop(cand, pot, m, need), C.URB);
+        }
+      } else {
+        var tot = tgt(C.URB, y), pops = [], ps = 0, haveT = new Int32Array(NT);
+        for (t = 0; t < NT; t++) { var pp = active[t] ? Math.pow(townPop(TOWNS[t], y), 0.9) : 0; pops.push(pp); ps += pp; }
+        for (i = 0; i < n; i++) if (cls[i] === C.URB && townOf[i] >= 0) haveT[townOf[i]]++;
+        for (t = 0; t < NT; t++) {
+          var wantT = Math.round(tot * pops[t] / ps) - haveT[t]; if (wantT <= 0) continue;
+          var tc = S.townCells[t], td = S.townDist[t], rad2 = 2 + 1.25 * Math.sqrt((haveT[t] + wantT) * S.CELL * S.CELL);
+          m = 0; for (j = 0; j < tc.length; j++) { i = tc[j]; if (cls[i] === C.URB || cls[i] === C.LAKE || cls[i] === C.ALP) continue; cand[m] = i; pot[m] = 2.2 * cn * frac(i, IS[C.URB]) - td[j] / rad2 + 0.6 * flat(i) - (cls[i] === C.NAT ? 0.3 : 0) + gauss() * sig * 0.8; m++; }
+          got = pickTop(cand, pot, m, wantT); convert(got, C.URB); for (j = 0; j < got.length; j++) townOf[got[j]] = t;
+        }
+      }
+      // 2. plantation forestry
+      need = tgt(C.PINE, y) - cnt[C.PINE];
+      var pSuit = function (i) { return 1.4 * pineF[i] + 0.95 * hill(i) * sstep(1960, 1990, y) + 1.4 * cn * frac(i, IS[C.PINE]) - (S.el[i] > 1000 ? 2 : 0) - 0.4 * flat(i) * low(i); };
+      var natOK = y > 1955 && y < 1985;
+      if (need > 0) { m = gather(natOK ? T_PINEN : T_PINE, function (i) { return (cls[i] !== C.NAT || anchor || S.protY[i] > y) && okDest(i, C.PINE); }, function (i) { return pSuit(i) + (cls[i] === C.NAT ? -0.5 : 0) + (cls[i] === C.SCRUB ? 0.2 : 0); }, 2, need); convert(pickTop(cand, pot, m, need), C.PINE); }
+      else if (need < 0) { m = gather(IS[C.PINE], anchor ? function (i) { return dest[i] !== C.PINE; } : null, function (i) { return -pSuit(i) + dSuit(i) * 0.5; }, 0, -need); convert(pickTop(cand, pot, m, -need), C.SHEEP); }
+      // 3. native forest clearance
+      need = cnt[C.NAT] - tgt(C.NAT, y);
+      if (need > 0) { m = gather(IS[C.NAT], anchor ? function (i) { return dest[i] !== C.NAT; } : function (i) { return S.protY[i] > y; }, function (i) { return 1.3 * A(i) + 1.1 * cn * frac(i, DEV) + 0.7 * flat(i) + 0.7 * low(i) + (S.si[i] ? -0.35 : 0.15) - (S.si[i] && S.dry[i] < 0.1 && S.lon[i] < 171.8 ? 0.6 : 0); }, 0, need);
+        convert(pickTop(cand, pot, m, need), C.SHEEP); }
+      // 4. wetland drainage
+      need = cnt[C.WET] - tgt(C.WET, y);
+      if (need > 0) { m = gather(IS[C.WET], anchor ? function (i) { return dest[i] !== C.WET; } : null, function (i) { return 1.4 * A(i) + 1.0 * cn * frac(i, DEV) + 0.5 * flat(i); }, 0, need); convert(pickTop(cand, pot, m, need), C.SHEEP); }
+      // 5. tussock improvement
+      need = cnt[C.TUSS] - tgt(C.TUSS, y);
+      if (need > 0) { m = gather(IS[C.TUSS], anchor ? function (i) { return dest[i] !== C.TUSS; } : null, function (i) { return A(i) + 0.8 * flat(i) + 1.2 * low(i) + 0.8 * cn * frac(i, GRASS) + S.plateau[i] * 0.4; }, 0, need); convert(pickTop(cand, pot, m, need), C.SHEEP); }
+      // 6. Māori gardens alienated
+      if (y >= 1850 && y <= 1900) for (i = 0; i < n; i++) if (origin[i] === 1 && cls[i] === C.CROP && !(anchor && dest[i] === C.CROP) && (rnd() < 0.06 || y === 1900)) { setC(i, C.SHEEP); origin[i] = 0; }
+      var keep = function (i) { return 1.2 * flat(i) + 1.0 * low(i) + A(i) + 0.8 * cn * frac(i, GRASS) - (S.si[i] && S.dry[i] < 0.1 ? 0.3 : 0); };
+      // 7. fernland and scrub cleared for pasture (anchored: scrub not in LCDB 1996 must go by then)
+      if (anchor && y < E0) {
+        var left0 = fernLeft, r = interp(DEM.NAT, y), r0 = interp(DEM.NAT, E0);
+        need = left0 - Math.round(fern0 * (1 - (1 - r) / (1 - r0)));
+        if (need > 0) { m = gather(IS[C.SCRUB], function (i) { return dest[i] !== C.SCRUB; }, keep, 3, need); convert(pickTop(cand, pot, m, need), C.SHEEP); }
+      }
+      // 8. sheep & beef vs scrub reversion
+      var sT = y < E0 ? Math.round(interp(SF, y) * (cnt[C.SHEEP] + cnt[C.SCRUB])) : tgt(C.SCRUB, y);
+      need = sT - cnt[C.SCRUB];
+      if (need > 0) { m = gather(IS[C.SHEEP], anchor ? function (i) { return dest[i] === C.SCRUB; } : null, function (i) { return -keep(i) + 0.6 * cn * frac(i, IS[C.SCRUB]); }, 3, need); convert(pickTop(cand, pot, m, need), C.SCRUB); }
+      else if (need < 0) { m = gather(IS[C.SCRUB], anchor ? function (i) { return dest[i] !== C.SCRUB; } : null, keep, 3, -need); convert(pickTop(cand, pot, m, -need), C.SHEEP); }
+      // 9. dairy
+      dairyStep();
+      // 10. cropping & horticulture
+      need = tgt(C.CROP, y) - cnt[C.CROP];
+      var cSuit = function (i) { return 1.2 * flat(i) * low(i) * (0.6 + 0.6 * S.dry[i]) + 1.3 * cropF[i] + 1.0 * cn * frac(i, IS[C.CROP]) + 0.4 * A(i); };
+      if (need > 0) { m = gather(T_CROP, function (i) { return origin[i] !== 1 && okDest(i, C.CROP); }, cSuit, 0, need); convert(pickTop(cand, pot, m, need), C.CROP); }
+      else if (need < 0) { m = gather(IS[C.CROP], anchor ? function (i) { return dest[i] !== C.CROP; } : null, function (i) { return -cSuit(i) + (origin[i] === 1 ? 2 : 0); }, 0, -need); var gl = pickTop(cand, pot, m, -need); convert(gl, C.SHEEP); gl.forEach(function (i) { origin[i] = 0; }); }
+
+      // first LCDB epoch: force every cell to its observed class
+      if (anchor && y === E0) {
+        for (i = 0; i < n; i++) {
+          var want2 = dispOf(dest[i], cls[i]);
+          if (want2 !== cls[i]) { snapped++; if ((cls[i] === C.NAT || cls[i] === C.WET) && !clearY[i] && want2 !== C.NAT && want2 !== C.WET) clearY[i] = y; setC(i, want2); }
+          cur[i] = dest[i];
+        }
+        dairyStep();
+      }
+    }
+    function dairyStep() {
+      var y = yr, m, need = tgtDairy(y) - cnt[C.DAIRY];
+      var irr = sstep(1985, 2015, y), Ls = 12 + 90 * sstep(1845, 1935, y) + 40 * sstep(1950, 1990, y);
+      var dS = function (i) { var wetOK = 1 - S.dry[i] * (1 - irr), A = acw * Math.exp(-dmin[i] / Ls); return 1.6 * flat(i) * low(i) * (0.4 + wetOK) + 1.2 * cn * frac(i, IS[C.DAIRY]) + 0.5 * A - (S.si[i] ? 0.45 * (1 - irr) - 0.35 * irr : 0) + (S.el[i] > 500 ? -1 : 0) - (S.lat[i] > -36.2 ? 0.4 * sstep(1950, 1990, y) : 0); };
+      var ts = anchor ? IS[C.SHEEP] : y > 2003 ? T_DAIRYF3 : irr > 0.2 ? T_DAIRYF2 : T_DAIRYF;
+      var dfn = anchor ? (y >= E0 ? function (i) { return cur[i] === HPG; } : function (i) { return dest[i] === HPG; }) : null;
+      if (need > 0) { m = gather(ts, dfn, function (i) { return dS(i) + (cls[i] === C.PINE ? -0.2 : 0); }, 1, need); convert(pickTop(cand, pot, m, need), C.DAIRY); }
+      else if (need < 0) { m = gather(IS[C.DAIRY], null, function (i) { return -dS(i); }, 0, -need); convert(pickTop(cand, pot, m, -need), C.SHEEP); }
+    }
+
+    var agree = [];
+    var res = { snaps: snaps, counts: counts, clearY: clearY, total: total, n: n, anchor: anchor, obsYears: OY, snapped: 0, agree: agree, upTo: Y0 - 1,
+      init: { nat: nNAT0, wet: nWET0, tuss: nTUSS0, scrub: nSCRUB0, alp: nALP } };
+    // time-sliced so a page can start playing early years while later ones are computed
     function loop() {
-      var stop = Math.min(Y1, yr + 12);
-      for (; yr <= stop; yr++) step();
-      if (onProgress) onProgress((yr - Y0) / years);
-      if (yr <= Y1) { if (typeof setTimeout === 'function' && !params.sync) setTimeout(loop, 0); else loop(); }
-      else onDone({ snaps: snaps, counts: counts, clearY: clearY, total: total, n: n });
+      var t0 = Date.now();
+      while (yr <= Y1) {
+        step();
+        snaps.set(cls, (yr - Y0) * n);
+        counts.push(Int32Array.from(cnt));
+        var ei = OY.indexOf(yr); if (ei >= 0) agree.push({ year: yr, a: agreement(cls, obs.subarray(ei * n, (ei + 1) * n), n) });
+        res.upTo = yr; res.snapped = snapped; yr++;
+        if (!params.sync && Date.now() - t0 > (params.slice || 35)) break;
+      }
+      if (onProgress) onProgress((yr - Y0) / years, res);
+      if (yr <= Y1) setTimeout(loop, 0); else onDone(res);
     }
     loop();
   }
 
-  return { C: C, Y0: Y0, Y1: Y1, build: build, run: run, TOWNS: TOWNS, DEM: DEM };
+  return { C: C, HPG: HPG, Y0: Y0, Y1: Y1, build: build, run: run, TOWNS: TOWNS, DEM: DEM, agreement: agreement };
 })();
 if (typeof module !== 'undefined') module.exports = NZModel;
