@@ -79,14 +79,17 @@ h1 { font-family: var(--f-display); font-weight: 400; font-size: clamp(1.6rem, 3
 .tip .ax { display: flex; justify-content: space-between; font-family: var(--f-mono); font-size: 10px; color: var(--muted); }
 
 .side { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
-.yearrow { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.yearrow { min-width: 0; }
+.side > .seg { align-self: flex-start; }
 .year { font-family: var(--f-display); font-size: clamp(3.4rem, 7vw, 5rem); line-height: .9; color: var(--accent); font-variant-numeric: tabular-nums; }
-.era { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
-.status { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); margin-top: 8px; min-height: 1.5em; }
+.era { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: .06em; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.status { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); margin-top: 8px; height: 1.5em; min-width: 0; }
+.status span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .status i { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--muted); flex: none; }
 .status.obs { color: var(--obs); font-weight: 600; } .status.obs i { background: var(--obs); border-color: var(--obs); }
 .status.interp { color: var(--obs); } .status.interp i { border-color: var(--obs); background: linear-gradient(90deg, var(--obs) 50%, transparent 50%); }
 .event { min-height: 4.6em; border-left: 2px solid var(--accent); padding-left: 12px; margin: 0; max-width: 60ch; }
+.event.measure { position: absolute; visibility: hidden; pointer-events: none; min-height: 0; }
 .event .when { font-family: var(--f-mono); font-size: 12px; color: var(--muted); display: block; }
 
 .transport { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
@@ -101,6 +104,7 @@ select { background: var(--panel); border: 1px solid var(--rule); border-radius:
 .seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 3px; overflow: hidden; flex-wrap: wrap; }
 .seg button { background: transparent; border: 0; padding: 6px 11px; cursor: pointer; font-size: 13px; color: var(--muted); }
 .seg button[aria-pressed=true] { background: var(--ink); color: var(--bg); }
+@media (max-width: 380px) { .seg button { padding: 6px 7px; font-size: 12px; } }
 .row { display: flex; gap: 12px 18px; align-items: center; flex-wrap: wrap; }
 .chk { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); cursor: pointer; }
 
@@ -179,17 +183,15 @@ summary { cursor: pointer; font-weight: 600; font-size: 14px; }
     </div>
 
     <div class="side">
+      <div class="seg" role="group" aria-label="Map view">
+        <button type="button" id="v0" aria-pressed="true">Land use</button>
+        <button type="button" id="v1" aria-pressed="false">Changed since 1840</button>
+        <button type="button" id="v2" aria-pressed="false">When cleared</button>
+      </div>
       <div class="yearrow">
-        <div>
-          <div class="era" id="era">Colonial settlement begins</div>
-          <div class="year" id="yearBig">1840</div>
-          <div class="status" id="status"><i></i><span>Modelled</span></div>
-        </div>
-        <div class="seg" role="group" aria-label="Map view">
-          <button type="button" id="v0" aria-pressed="true">Land use</button>
-          <button type="button" id="v1" aria-pressed="false">Changed since 1840</button>
-          <button type="button" id="v2" aria-pressed="false">When cleared</button>
-        </div>
+        <div class="era" id="era">Colonial settlement begins</div>
+        <div class="year" id="yearBig">1840</div>
+        <div class="status" id="status"><i></i><span>Modelled</span></div>
       </div>
       <p class="event" id="event"><span class="when">1840</span>Te Tiriti o Waitangi is signed.</p>
       <div class="transport">
@@ -459,17 +461,17 @@ var GRID = /*GRID*/;
   function statusOf(y) {
     var oy = GRID.lcYears, last = oy[oy.length - 1], k = oy.indexOf(y);
     if (R && !R.anchor) {
-      if (k >= 0) { var a = R.agree.filter(function (q) { return q.year === y; })[0]; return { c: 'mod', t: 'Modelled, free run' + (a ? ' · ' + Math.round(a.a.pc) + '% of cells match LCDB ' + season(y) : ''), b: 'Modelled' }; }
-      return { c: 'mod', t: 'Modelled, free run (not anchored to LCDB)', b: 'Modelled' };
+      if (k >= 0) { var a = R.agree.filter(function (q) { return q.year === y; })[0]; return { c: 'mod', t: 'Free run' + (a ? ' · ' + Math.round(a.a.pc) + '% match LCDB ' + season(y) : ''), b: 'Modelled' }; }
+      return { c: 'mod', t: 'Modelled · free run', b: 'Modelled' };
     }
     if (k >= 0) return { c: 'obs', t: 'Observed · LCDB ' + season(y), b: 'Observed · LCDB ' + season(y) };
-    if (y > oy[0] && y < last) { for (var e = 0; e < oy.length - 1; e++) if (y < oy[e + 1]) return { c: 'interp', t: 'Interpolated between LCDB ' + season(oy[e]) + ' and ' + season(oy[e + 1]), b: 'Interpolated' }; }
-    if (y > last) return { c: 'mod', t: 'Repeats LCDB ' + season(last) + ' (no newer map)', b: 'As LCDB ' + season(last) };
+    if (y > oy[0] && y < last) { for (var e = 0; e < oy.length - 1; e++) if (y < oy[e + 1]) return { c: 'interp', t: 'Interpolated · LCDB ' + season(oy[e]) + ' → ' + season(oy[e + 1]), b: 'Interpolated' }; }
+    if (y > last) return { c: 'mod', t: 'Repeats LCDB ' + season(last), b: 'As LCDB ' + season(last) };
     return { c: 'mod', t: 'Modelled reconstruction', b: 'Modelled' };
   }
   function updateStatus() {
     var s = statusOf(year), st = $('status'), bd = $('badge');
-    st.className = 'status ' + s.c; st.lastChild.textContent = s.t;
+    st.className = 'status ' + s.c; st.lastChild.textContent = s.t; st.title = s.t;
     bd.className = 'badge ' + s.c; bd.textContent = s.b; bd.hidden = !R;
   }
 
@@ -667,10 +669,17 @@ var GRID = /*GRID*/;
     }, 30);
   }
 
-  window.addEventListener('resize', function () { sizeCanvas(); });
+  function fitEvents() {
+    var ev = $('event'), m = ev.cloneNode(false); m.className = 'event measure'; m.removeAttribute('id'); m.style.width = ev.clientWidth + 'px';
+    ev.parentNode.appendChild(m); var hmax = 0;
+    EVENTS.forEach(function (e) { m.innerHTML = '<span class="when">' + e[0] + 's</span>' + e[1]; hmax = Math.max(hmax, m.offsetHeight); });
+    m.remove(); ev.style.minHeight = hmax + 'px';
+  }
+  window.addEventListener('resize', function () { sizeCanvas(); fitEvents(); });
   var mq = window.matchMedia('(prefers-color-scheme: dark)'); if (mq.addEventListener) mq.addEventListener('change', draw);
   new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
-  if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { textW = {}; compose(); });
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { textW = {}; compose(); fitEvents(); });
+  fitEvents();
   window.NZMap = { view: function () { return { z: z, cx: cx, cy: cy, base: base, dispW: dispW, dispH: dispH, year: year, avail: avail, W: W, H: H }; } };
   sizeCanvas(); afterView(); setYear(Y0);
   setTimeout(function () {
