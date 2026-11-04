@@ -1,0 +1,437 @@
+<title>Aotearoa Land-Use Model</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Young+Serif&family=Public+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: survey-office plan table. Tall map sheet on the left, a ledger of years, classes and totals on the right. */
+:root {
+  --bg: #eef1ef; --panel: #f7f9f8; --ink: #1b2420; --muted: #5d6a64; --rule: #c9d2ce;
+  --sea: #d3e0e3; --coast: #3d5a63; --accent: #b23f2a; --accent-ink: #ffffff; --label: #16201c; --halo: rgba(247,249,248,.85);
+  --f-display: "Young Serif", "Iowan Old Style", Georgia, serif;
+  --f-body: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0f1513; --panel: #161e1b; --ink: #e2e9e5; --muted: #93a19b; --rule: #2b3632;
+  --sea: #142227; --coast: #6f96a1; --accent: #e3725a; --accent-ink: #1a0f0b; --label: #eef3f0; --halo: rgba(15,21,19,.8); color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0f1513; --panel: #161e1b; --ink: #e2e9e5; --muted: #93a19b; --rule: #2b3632;
+  --sea: #142227; --coast: #6f96a1; --accent: #e3725a; --accent-ink: #1a0f0b; --label: #eef3f0; --halo: rgba(15,21,19,.8); color-scheme: dark }
+
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--f-body); font-size: 15px; line-height: 1.5;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 20px 40px; }
+.wrap { max-width: 1240px; margin: 0 auto; display: flex; flex-direction: column; gap: 22px; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 24px; border-bottom: 1px solid var(--rule); padding-bottom: 14px; }
+h1 { font-family: var(--f-display); font-weight: 400; font-size: clamp(1.6rem, 3.4vw, 2.3rem); line-height: 1.1; margin: 0; text-wrap: balance; }
+.sub { color: var(--muted); max-width: 62ch; margin: 6px 0 0; }
+.sheet { font-family: var(--f-mono); font-size: 12px; color: var(--muted); letter-spacing: .04em; text-transform: uppercase; text-align: right; }
+
+.main { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 28px; align-items: start; }
+@media (max-width: 860px) { .main { grid-template-columns: minmax(0, 1fr); } }
+
+.mapbox { position: relative; background: var(--sea); border: 1px solid var(--rule); border-radius: 4px; overflow: hidden; touch-action: manipulation; }
+.mapbox canvas { display: block; width: 100%; height: auto; }
+#map { cursor: crosshair; }
+.loading { position: absolute; inset: auto 16px 16px 16px; display: flex; flex-direction: column; gap: 6px; font-family: var(--f-mono); font-size: 12px; color: var(--muted); }
+.bar { height: 3px; background: var(--rule); border-radius: 2px; overflow: hidden; }
+.bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .15s; }
+.scale { position: absolute; left: 14px; bottom: 12px; font-family: var(--f-mono); font-size: 11px; color: var(--muted); display: flex; flex-direction: column; gap: 3px; pointer-events: none; }
+.scale span { display: block; height: 4px; border: 1px solid var(--muted); border-top: 0; }
+.north { position: absolute; right: 14px; top: 12px; font-family: var(--f-display); font-size: 14px; color: var(--muted); text-align: center; line-height: 1; pointer-events: none; }
+
+.tip { position: absolute; z-index: 5; min-width: 220px; max-width: 260px; background: var(--panel); color: var(--ink); border: 1px solid var(--rule);
+  border-radius: 4px; padding: 10px 12px; font-size: 13px; box-shadow: 0 6px 20px rgba(0,0,0,.18); pointer-events: none; }
+.tip b { font-weight: 600; }
+.tip .k { font-family: var(--f-mono); font-size: 11px; color: var(--muted); }
+.tip canvas { width: 100%; height: 12px; margin-top: 6px; image-rendering: pixelated; border-radius: 2px; }
+.tip .ax { display: flex; justify-content: space-between; font-family: var(--f-mono); font-size: 10px; color: var(--muted); }
+
+.side { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+.yearrow { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.year { font-family: var(--f-display); font-size: clamp(3.4rem, 7vw, 5rem); line-height: .9; color: var(--accent); font-variant-numeric: tabular-nums; }
+.era { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
+.event { min-height: 4.6em; border-left: 2px solid var(--accent); padding-left: 12px; margin: 0; max-width: 60ch; }
+.event .when { font-family: var(--f-mono); font-size: 12px; color: var(--muted); display: block; }
+
+.transport { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+button, select, input { font: inherit; color: inherit; }
+.btn { background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 3px; padding: 7px 14px; font-weight: 600; cursor: pointer; min-width: 84px; }
+.btn.ghost { background: transparent; color: var(--ink); border: 1px solid var(--rule); font-weight: 500; }
+.btn:focus-visible, .seg button:focus-visible, select:focus-visible, input:focus-visible, .legend li:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+input[type=range] { accent-color: var(--accent); }
+#yr { flex: 1 1 180px; min-width: 0; }
+select { background: var(--panel); border: 1px solid var(--rule); border-radius: 3px; padding: 6px 8px; }
+.seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 3px; overflow: hidden; flex-wrap: wrap; }
+.seg button { background: transparent; border: 0; padding: 6px 11px; cursor: pointer; font-size: 13px; color: var(--muted); }
+.seg button[aria-pressed=true] { background: var(--ink); color: var(--bg); }
+.row { display: flex; gap: 12px 18px; align-items: center; flex-wrap: wrap; }
+.chk { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); cursor: pointer; }
+
+.label { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600; margin: 0 0 8px; }
+.legend { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr; }
+.legend li { display: grid; grid-template-columns: 14px minmax(0,1fr) 56px 64px; gap: 10px; align-items: center; padding: 4px 4px; border-bottom: 1px solid var(--rule); cursor: default; font-size: 14px; }
+.legend li:hover, .legend li.on { background: color-mix(in srgb, var(--ink) 6%, transparent); }
+.legend .sw { width: 14px; height: 14px; border-radius: 2px; }
+.legend .v, .legend .d { font-family: var(--f-mono); font-size: 12.5px; text-align: right; font-variant-numeric: tabular-nums; }
+.legend .d { color: var(--muted); }
+.legend .head { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; cursor: default; }
+.legend .head:hover { background: none; }
+
+.rampkey { display: flex; flex-direction: column; gap: 3px; margin: 0 0 12px; max-width: 360px; }
+.rampkey .rb { height: 10px; border-radius: 2px; background: linear-gradient(90deg, rgb(253,231,160) 0%, rgb(244,165,84) 21.6%, rgb(211,84,60) 43.2%, rgb(140,40,80) 64.9%, rgb(60,25,75) 100%); }
+.rampkey .rl { display: flex; justify-content: space-between; font-family: var(--f-mono); font-size: 10px; color: var(--muted); }
+.chart svg { width: 100%; height: auto; display: block; overflow: visible; cursor: pointer; }
+.chart text { font-family: var(--f-mono); font-size: 10px; fill: var(--muted); }
+.chart .grid { stroke: var(--rule); stroke-width: 1; }
+.chart .cur { stroke: var(--ink); stroke-width: 1.5; }
+
+details { border-top: 1px solid var(--rule); padding-top: 12px; }
+summary { cursor: pointer; font-weight: 600; font-size: 14px; }
+.settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px 22px; margin-top: 14px; }
+.settings label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.settings .hint { color: var(--muted); font-size: 12px; }
+.settings output { font-family: var(--f-mono); font-size: 12px; color: var(--muted); }
+.seedrow { display: flex; gap: 8px; }
+.seedrow input { width: 100%; min-width: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 3px; padding: 6px 8px; font-family: var(--f-mono); }
+
+.notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 22px 32px; border-top: 1px solid var(--rule); padding-top: 22px; }
+.notes h2 { font-family: var(--f-display); font-weight: 400; font-size: 1.2rem; margin: 0 0 6px; }
+.notes p, .notes ul { margin: 0 0 8px; color: var(--ink); font-size: 14px; max-width: 65ch; }
+.notes ul { padding-left: 18px; }
+.notes a { color: var(--accent); }
+.muted { color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { .bar i { transition: none; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Aotearoa land use, 1840–2025</h1>
+      <p class="sub">A cellular-automaton model of how forest, wetland and tussock gave way to pasture, pine, crops and towns. National totals follow historical estimates; where change happens is modelled.</p>
+    </div>
+    <div class="sheet">Grid 2.5 km · 43,018 cells<br>Modelled, not mapped</div>
+  </header>
+
+  <div class="main">
+    <div class="mapbox" id="mapbox">
+      <canvas id="map" aria-label="Map of modelled land use in New Zealand"></canvas>
+      <div class="north" aria-hidden="true">▲<br>N</div>
+      <div class="scale" aria-hidden="true"><em id="scaleLbl" style="font-style:normal">100 km</em><span id="scaleBar" style="width:60px"></span></div>
+      <div class="loading" id="loading"><span id="loadTxt">Running the model…</span><div class="bar"><i id="loadBar"></i></div></div>
+      <div class="tip" id="tip" hidden></div>
+    </div>
+
+    <div class="side">
+      <div class="yearrow">
+        <div>
+          <div class="era" id="era">Colonial settlement begins</div>
+          <div class="year" id="yearBig">1840</div>
+        </div>
+        <div class="seg" role="group" aria-label="Map view">
+          <button type="button" id="v0" aria-pressed="true">Land use</button>
+          <button type="button" id="v1" aria-pressed="false">Changed since 1840</button>
+          <button type="button" id="v2" aria-pressed="false">When cleared</button>
+        </div>
+      </div>
+      <p class="event" id="event"><span class="when">1840</span>Te Tiriti o Waitangi is signed.</p>
+      <div class="transport">
+        <button class="btn" id="play" type="button">Play</button>
+        <input type="range" id="yr" min="1840" max="2025" value="1840" step="1" aria-label="Year">
+        <select id="speed" aria-label="Playback speed">
+          <option value="6">6 yr/s</option>
+          <option value="12" selected>12 yr/s</option>
+          <option value="25">25 yr/s</option>
+        </select>
+      </div>
+      <div class="row">
+        <label class="chk"><input type="checkbox" id="relief" checked> Relief shading</label>
+        <label class="chk"><input type="checkbox" id="towns" checked> Town names</label>
+      </div>
+
+      <div>
+        <p class="label" id="legendLabel">Share of land area</p>
+        <div id="rampKey" class="rampkey" hidden><span class="rb"></span><span class="rl"><span>1840</span><span>1880</span><span>1920</span><span>1960</span><span>2025</span></span></div>
+        <ul class="legend" id="legend"></ul>
+      </div>
+
+      <div class="chart">
+        <p class="label">Land-use mix over time · click to jump</p>
+        <svg id="chart" viewBox="0 0 600 230" role="img" aria-label="Stacked area chart of land-use shares from 1840 to 2025"></svg>
+      </div>
+
+      <details>
+        <summary>Model settings</summary>
+        <div class="settings">
+          <label for="seed">Random seed
+            <span class="seedrow"><input id="seed" type="number" value="1" min="1" step="1"><button class="btn ghost" type="button" id="reseed">New</button></span>
+            <span class="hint">Each seed is one equally plausible history.</span></label>
+          <label for="pCont">Contagion <output id="oCont">1.0</output>
+            <input id="pCont" type="range" min="0" max="2.5" step="0.1" value="1">
+            <span class="hint">How strongly change spreads from neighbouring cells.</span></label>
+          <label for="pNoise">Randomness <output id="oNoise">0.35</output>
+            <input id="pNoise" type="range" min="0" max="1" step="0.05" value="0.35">
+            <span class="hint">Noise in each cell's pull towards change.</span></label>
+          <label for="pAcc">Access to towns <output id="oAcc">1.0</output>
+            <input id="pAcc" type="range" min="0" max="2.5" step="0.1" value="1">
+            <span class="hint">How much distance from settlements slows clearance.</span></label>
+        </div>
+        <div class="row" style="margin-top:14px">
+          <button class="btn" type="button" id="rerun">Run model</button>
+          <button class="btn ghost" type="button" id="reset">Reset settings</button>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <section class="notes">
+    <div>
+      <h2>How the model works</h2>
+      <p>The country is a grid of 2.5 km cells. In 1840 each cell starts as native forest, scrub and fernland, tussock, wetland or alpine, ranked by a rough terrain model, rainfall shadow and distance from Māori settlement.</p>
+      <p>Each year the model knows how much of each land use the country should have. It then picks which cells change, scoring them by slope, altitude, dryness, distance to towns that exist that year, what their neighbours already are, and some noise. Forest clears outward from towns and existing farmland, dairy clusters on flat wetter land, pine clusters on pumice and hill country.</p>
+    </div>
+    <div>
+      <h2>What it is anchored to</h2>
+      <ul>
+        <li>About half of the land in forest in 1840, and about a quarter today.</li>
+        <li>LUCAS and LCDB totals for pasture, plantation, cropping and urban land since 1990.</li>
+        <li>Wetland reduced to about a tenth of its 1840 extent.</li>
+        <li>Town founding dates and rough population history for 54 settlements.</li>
+        <li>Founding years of national and forest parks, which stop clearance inside them.</li>
+      </ul>
+    </div>
+    <div>
+      <h2>Read it with care</h2>
+      <p>This is a sketch, not a dataset. Terrain is hand-approximated from mountain ranges, not from a real elevation model, and class totals between survey years are interpolated. Individual cells will often be wrong; the broad sequence and pattern are what the model shows.</p>
+      <p class="muted">Sources: <a href="https://environment.govt.nz/facts-and-science/science-and-data/new-zealand-land-use-map" target="_blank" rel="noopener">MfE LUCAS land use map</a>, <a href="https://soils.landcareresearch.co.nz/tools/our-environment/our-environment-development/" target="_blank" rel="noopener">Manaaki Whenua LCDB</a>, <a href="https://teara.govt.nz/mi/map/17881/new-zealand-vegetation-cover-around-1840" target="_blank" rel="noopener">Te Ara 1840 vegetation map</a>, <a href="https://www.mikepole.com/?p=10081" target="_blank" rel="noopener">Pole on 1840 forest maps</a>, <a href="https://mapspast.org.nz/" target="_blank" rel="noopener">MapsPast</a>. Coastline from Natural Earth.</p>
+    </div>
+  </section>
+</div>
+
+<script>
+/*MODEL*/
+var GRID = /*GRID*/;
+</script>
+<script>
+(function () {
+  'use strict';
+  var M = NZModel, C = M.C, Y0 = M.Y0, Y1 = M.Y1;
+  var CLASSES = [
+    { id: C.NAT, name: 'Native forest', col: '#2f5d3a' },
+    { id: C.SCRUB, name: 'Scrub & fernland', col: '#8d904c' },
+    { id: C.TUSS, name: 'Tussock grassland', col: '#d6bf78' },
+    { id: C.WET, name: 'Wetland', col: '#3f9c9a' },
+    { id: C.ALP, name: 'Alpine, rock & ice', col: '#dfe3e6' },
+    { id: C.SHEEP, name: 'Sheep & beef pasture', col: '#b3cf78' },
+    { id: C.DAIRY, name: 'Dairy pasture', col: '#45ad46' },
+    { id: C.PINE, name: 'Plantation forest', col: '#1f4a5e' },
+    { id: C.CROP, name: 'Crops & horticulture', col: '#d8952f' },
+    { id: C.URB, name: 'Urban', col: '#c23b2a' }
+  ];
+  var LAKECOL = '#7fa6c2';
+  var STACK = [C.URB, C.CROP, C.DAIRY, C.SHEEP, C.PINE, C.SCRUB, C.TUSS, C.WET, C.NAT, C.ALP];
+  var byId = {}; CLASSES.forEach(function (c) { byId[c.id] = c; });
+  function hex(h) { return [parseInt(h.substr(1, 2), 16), parseInt(h.substr(3, 2), 16), parseInt(h.substr(5, 2), 16)]; }
+  var RGB = []; for (var c = 0; c < 12; c++) RGB.push([0, 0, 0]);
+  CLASSES.forEach(function (c) { RGB[c.id] = hex(c.col); }); RGB[C.LAKE] = hex(LAKECOL);
+
+  var EVENTS = [
+    [1840, 'Te Tiriti o Waitangi is signed. Wellington and Auckland are founded. About half the land is forest; fernland surrounds Māori settlements in the north.'],
+    [1850, 'Canterbury and Otago settlements grow. Sheep runs spread across the eastern tussock grasslands of Te Waipounamu.'],
+    [1860, 'Gold rushes in Otago and Westland. War in Taranaki and Waikato, followed by large land confiscations.'],
+    [1870, 'Vogel’s public works bring roads, rail and assisted immigrants. Bush burning speeds up in the North Island.'],
+    [1882, 'The first refrigerated shipment of meat sails from Port Chalmers, opening export markets for meat and dairy.'],
+    [1885, 'The King Country opens to Pākehā settlement and the North Island Main Trunk railway begins.'],
+    [1895, 'Forest clearance peaks in Taranaki, Manawatū, Hawke’s Bay and Wairarapa. Waikato and Hauraki swamps are drained.'],
+    [1920, 'Much cleared hill country reverts to scrub. The first big radiata pine planting boom begins on the Kaingaroa plains.'],
+    [1950, 'Aerial topdressing and oversowing push improved pasture into hill country. Dairying is concentrated in Waikato and Taranaki.'],
+    [1960, 'A second planting boom and new mill towns such as Tokoroa and Kawerau.'],
+    [1984, 'Farm subsidies are removed. Some marginal hill farms are retired or planted.'],
+    [1988, 'Cyclone Bola leads to erosion-control forestry on the East Coast.'],
+    [1992, 'Irrigation drives dairy conversions on the Canterbury and Southland plains.'],
+    [2008, 'The Emissions Trading Scheme starts. Some pine forest is felled and converted to dairy.'],
+    [2018, 'Carbon forestry spreads onto sheep and beef hill country. Auckland, Tauranga, Hamilton and Queenstown keep growing.']
+  ];
+  var ERAS = [[1840, 'Colonial settlement begins'], [1860, 'Gold, war and confiscation'], [1880, 'The great bush burn'], [1920, 'Reversion and first pines'], [1945, 'Grassland revolution'], [1984, 'Deregulation'], [1990, 'Dairy and pine expansion']];
+  var LABELS = ['Auckland', 'Wellington', 'Christchurch', 'Dunedin', 'Hamilton', 'Tauranga', 'Napier', 'Nelson', 'Invercargill', 'New Plymouth', 'Palmerston North', 'Gisborne', 'Whangārei', 'Rotorua', 'Queenstown', 'Greymouth', 'Timaru', 'Blenheim'];
+
+  var $ = function (id) { return document.getElementById(id); };
+  var S = M.build(GRID), R = null, year = Y0, view = 0, hi = -1, playing = false;
+  var W = S.W, H = S.H;
+  // per-cell shade factor
+  var SH = new Float32Array(S.n); for (var i = 0; i < S.n; i++) SH[i] = Math.max(0.55, Math.min(1.22, 0.66 + 0.55 * S.shade[S.cells[i]]));
+  var off = document.createElement('canvas'); off.width = W; off.height = H;
+  var octx = off.getContext('2d'), img = octx.createImageData(W, H);
+  var canvas = $('map'), ctx = canvas.getContext('2d');
+  var coast = new Path2D(GRID.coast);
+  var scale = 1;
+
+  function tok(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+  function sizeCanvas() {
+    var box = $('mapbox'), cw = box.clientWidth, maxH = Math.max(420, window.innerHeight * 0.86);
+    var dispW = Math.min(cw, maxH * W / H), dpr = window.devicePixelRatio || 1;
+    canvas.style.width = dispW + 'px'; canvas.style.margin = '0 auto';
+    canvas.width = Math.round(dispW * dpr); canvas.height = Math.round(dispW * H / W * dpr);
+    scale = canvas.width / W;
+    var kmPx = dispW / (W * S.CELL); $('scaleBar').style.width = Math.round(100 * kmPx) + 'px';
+    draw();
+  }
+
+  var CLEAR_RAMP = [[1840, [253, 231, 160]], [1880, [244, 165, 84]], [1920, [211, 84, 60]], [1960, [140, 40, 80]], [2025, [60, 25, 75]]];
+  function ramp(y) { for (var k = 1; k < CLEAR_RAMP.length; k++) if (y <= CLEAR_RAMP[k][0]) { var a = CLEAR_RAMP[k - 1], b = CLEAR_RAMP[k], t = (y - a[0]) / (b[0] - a[0]); return [a[1][0] + (b[1][0] - a[1][0]) * t, a[1][1] + (b[1][1] - a[1][1]) * t, a[1][2] + (b[1][2] - a[1][2]) * t]; } return CLEAR_RAMP[CLEAR_RAMP.length - 1][1]; }
+
+  function draw() {
+    var sea = hex(tok('--sea') || '#d3e0e3'), d = img.data, relief = $('relief').checked;
+    for (var p = 0; p < W * H; p++) { d[p * 4] = sea[0]; d[p * 4 + 1] = sea[1]; d[p * 4 + 2] = sea[2]; d[p * 4 + 3] = 255; }
+    if (R) {
+      var base = (year - Y0) * S.n, s0 = 0;
+      for (var i = 0; i < S.n; i++) {
+        var c = R.snaps[base + i], col = RGB[c], f = relief ? SH[i] : 1, r = col[0], g = col[1], b = col[2];
+        if (view === 1 && c !== C.LAKE) { var c0 = R.snaps[s0 + i]; if (c0 === c) { var gr = 0.3 * r + 0.59 * g + 0.11 * b; r = g = b = gr * 0.35 + 150; } }
+        else if (view === 2 && c !== C.LAKE) {
+          var c0b = R.snaps[s0 + i];
+          if (c0b === C.NAT || c0b === C.WET) { var cy = R.clearY[i]; if (cy && cy <= year) { var rc = ramp(cy); r = rc[0]; g = rc[1]; b = rc[2]; } }
+          else { var gr2 = 0.3 * r + 0.59 * g + 0.11 * b; r = g = b = gr2 * 0.3 + 160; }
+        }
+        if (hi >= 0 && c !== hi) { r = r * 0.25 + 170; g = g * 0.25 + 175; b = b * 0.25 + 175; }
+        var o = S.cells[i] * 4; d[o] = r * f; d[o + 1] = g * f; d[o + 2] = b * f;
+      }
+    }
+    octx.putImageData(img, 0, 0);
+    ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(off, 0, 0, canvas.width, canvas.height);
+    ctx.setTransform(scale, 0, 0, scale, 0, 0);
+    ctx.lineWidth = 1.1 / scale * (window.devicePixelRatio || 1); ctx.strokeStyle = tok('--coast'); ctx.stroke(coast);
+    if ($('towns').checked) drawLabels();
+  }
+  function drawLabels() {
+    var dpr = window.devicePixelRatio || 1, fs = Math.max(10, Math.min(13, canvas.width / dpr / 34)) * dpr;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.font = '500 ' + fs + 'px ' + tok('--f-body'); ctx.textBaseline = 'middle';
+    M.TOWNS.forEach(function (t) {
+      if (LABELS.indexOf(t[0]) < 0 || t[3] > year) return;
+      var x = (S.gxOf(t[1]) + 0.5) * scale, y = (S.gyOf(t[2]) + 0.5) * scale, left = ['New Plymouth', 'Greymouth', 'Queenstown', 'Invercargill', 'Hamilton', 'Whangārei', 'Gisborne'].indexOf(t[0]) >= 0;
+      ctx.fillStyle = tok('--label'); ctx.beginPath(); ctx.arc(x, y, 2.2 * dpr, 0, 7); ctx.fill();
+      var tx = left ? x - 6 * dpr : x + 6 * dpr; ctx.textAlign = left ? 'right' : 'left';
+      ctx.lineWidth = 3 * dpr; ctx.strokeStyle = tok('--halo'); ctx.strokeText(t[0], tx, y); ctx.fillText(t[0], tx, y);
+    });
+  }
+
+  // ---- legend ----
+  var legend = $('legend');
+  legend.innerHTML = '<li class="head" aria-hidden="true"><span></span><span>Class</span><span class="v">Now</span><span class="d">vs 1840</span></li>' +
+    CLASSES.map(function (c) { return '<li tabindex="0" data-c="' + c.id + '"><span class="sw" style="background:' + c.col + '"></span><span>' + c.name + '</span><span class="v" id="lv' + c.id + '">–</span><span class="d" id="ld' + c.id + '">–</span></li>'; }).join('');
+  Array.prototype.forEach.call(legend.querySelectorAll('li[data-c]'), function (li) {
+    var on = function () { hi = +li.dataset.c; li.classList.add('on'); draw(); }, offf = function () { hi = -1; li.classList.remove('on'); draw(); };
+    li.addEventListener('mouseenter', on); li.addEventListener('mouseleave', offf); li.addEventListener('focus', on); li.addEventListener('blur', offf);
+  });
+  function updateLegend() {
+    if (!R) return; var cc = R.counts[year - Y0], c0 = R.counts[0];
+    CLASSES.forEach(function (c) { var v = cc[c.id] / R.total * 100, d = v - c0[c.id] / R.total * 100;
+      $('lv' + c.id).textContent = v.toFixed(1) + '%'; $('ld' + c.id).textContent = (Math.abs(d) < 0.05 ? '·' : (d > 0 ? '+' : '−') + Math.abs(d).toFixed(1)); });
+  }
+
+  // ---- chart ----
+  var svg = $('chart'), X0 = 34, X1 = 594, YT = 8, YB = 204;
+  function sx(y) { return X0 + (y - Y0) / (Y1 - Y0) * (X1 - X0); }
+  function sy(p) { return YB - p / 100 * (YB - YT); }
+  function buildChart() {
+    var ns = 'http://www.w3.org/2000/svg', out = '';
+    [0, 25, 50, 75, 100].forEach(function (p) { out += '<line class="grid" x1="' + X0 + '" x2="' + X1 + '" y1="' + sy(p) + '" y2="' + sy(p) + '"/><text x="' + (X0 - 6) + '" y="' + (sy(p) + 3) + '" text-anchor="end">' + p + '%</text>'; });
+    var cum = R.counts.map(function () { return 0; }), land = R.total;
+    STACK.forEach(function (id) {
+      var top = [], bot = [];
+      R.counts.forEach(function (cc, k) { var b0 = cum[k]; cum[k] += cc[id] / land * 100; bot.push(sx(Y0 + k).toFixed(1) + ',' + sy(b0).toFixed(1)); top.push(sx(Y0 + k).toFixed(1) + ',' + sy(cum[k]).toFixed(1)); });
+      out += '<path fill="' + byId[id].col + '" d="M' + top.join('L') + 'L' + bot.reverse().join('L') + 'Z"/>';
+    });
+    [1840, 1880, 1920, 1960, 2000, 2025].forEach(function (y) { out += '<text x="' + sx(y) + '" y="' + (YB + 16) + '" text-anchor="' + (y === 2025 ? 'end' : y === 1840 ? 'start' : 'middle') + '">' + y + '</text>'; });
+    out += '<line class="cur" id="cur" x1="0" x2="0" y1="' + (YT - 4) + '" y2="' + (YB + 4) + '"/>';
+    svg.innerHTML = out;
+  }
+  function chartYear(ev) { var pt = svg.getBoundingClientRect(), x = (ev.clientX - pt.left) / pt.width * 600; setYear(Math.round(Y0 + (x - X0) / (X1 - X0) * (Y1 - Y0))); }
+  var dragging = false;
+  svg.addEventListener('pointerdown', function (e) { if (!R) return; dragging = true; svg.setPointerCapture(e.pointerId); stop(); chartYear(e); });
+  svg.addEventListener('pointermove', function (e) { if (dragging) chartYear(e); });
+  svg.addEventListener('pointerup', function () { dragging = false; });
+
+  // ---- year / events ----
+  function setYear(y) {
+    year = Math.max(Y0, Math.min(Y1, y)); $('yr').value = year; $('yearBig').textContent = year;
+    var ev = EVENTS[0]; EVENTS.forEach(function (e) { if (e[0] <= year) ev = e; });
+    $('event').innerHTML = '<span class="when">' + (ev[0] % 10 === 0 && ev[0] !== 1840 ? ev[0] + 's' : ev[0]) + '</span>' + ev[1];
+    var era = ERAS[0][1]; ERAS.forEach(function (e) { if (e[0] <= year) era = e[1]; }); $('era').textContent = era;
+    var cur = document.getElementById('cur'); if (cur) { cur.setAttribute('x1', sx(year)); cur.setAttribute('x2', sx(year)); }
+    updateLegend(); draw(); if (tipCell >= 0) showTip(tipCell, tipX, tipY);
+  }
+  $('yr').addEventListener('input', function () { stop(); setYear(+this.value); });
+
+  var last = 0, acc = 0, raf = 0;
+  function tick(t) { if (!playing) return; var dt = last ? (t - last) / 1000 : 0; last = t; acc += dt * +$('speed').value;
+    if (acc >= 1) { var stepN = Math.floor(acc); acc -= stepN; if (year >= Y1) { stop(); return; } setYear(year + stepN); }
+    raf = requestAnimationFrame(tick); }
+  function play() { if (!R) return; if (year >= Y1) setYear(Y0); playing = true; last = 0; acc = 0; $('play').textContent = 'Pause'; raf = requestAnimationFrame(tick); }
+  function stop() { playing = false; cancelAnimationFrame(raf); $('play').textContent = year >= Y1 ? 'Replay' : 'Play'; }
+  $('play').addEventListener('click', function () { playing ? stop() : play(); });
+  document.addEventListener('keydown', function (e) {
+    if (!R || /input|select|textarea/i.test(e.target.tagName) && e.target.type !== 'range') return;
+    if (e.key === ' ' && e.target.tagName !== 'BUTTON') { e.preventDefault(); playing ? stop() : play(); }
+    if (e.target.type === 'range') return;
+    if (e.key === 'ArrowRight') { stop(); setYear(year + (e.shiftKey ? 10 : 1)); }
+    if (e.key === 'ArrowLeft') { stop(); setYear(year - (e.shiftKey ? 10 : 1)); }
+  });
+
+  // ---- views ----
+  ['v0', 'v1', 'v2'].forEach(function (id, k) { $(id).addEventListener('click', function () { view = k; ['v0', 'v1', 'v2'].forEach(function (j, q) { $(j).setAttribute('aria-pressed', q === k); });
+    $('rampKey').hidden = k !== 2; $('legendLabel').textContent = k === 2 ? 'Year forest or wetland was cleared · grey was never forest' : k === 1 ? 'Share of land area · grey cells are unchanged since 1840' : 'Share of land area'; draw(); }); });
+  $('relief').addEventListener('change', draw); $('towns').addEventListener('change', draw);
+
+  // ---- tooltip ----
+  var tip = $('tip'), tipCell = -1, tipX = 0, tipY = 0;
+  function cellAt(e) { var r = canvas.getBoundingClientRect(), gx = Math.floor((e.clientX - r.left) / r.width * W), gy = Math.floor((e.clientY - r.top) / r.height * H);
+    if (gx < 0 || gy < 0 || gx >= W || gy >= H) return -1; return S.idx[gy * W + gx]; }
+  function fmtLL(v, p, n) { return Math.abs(v).toFixed(2) + '°' + (v < 0 ? n : p); }
+  function showTip(i, x, y) {
+    if (!R || i < 0) { tip.hidden = true; return; }
+    var c = R.snaps[(year - Y0) * S.n + i], c0 = R.snaps[i], nm = c === C.LAKE ? 'Lake' : byId[c].name;
+    var hist = '';
+    if (c !== C.LAKE) { var changes = []; var prev = c0; for (var y = Y0 + 1; y <= Y1; y++) { var cy = R.snaps[(y - Y0) * S.n + i]; if (cy !== prev) { changes.push(y + ' ' + byId[cy].name.toLowerCase()); prev = cy; } }
+      hist = '<div class="k" style="margin-top:6px">1840: ' + byId[c0].name.toLowerCase() + (changes.length ? '<br>' + changes.slice(0, 4).join('<br>') + (changes.length > 4 ? '<br>…' : '') : '<br>No change to 2025') + '</div><canvas id="hc" width="186" height="1"></canvas><div class="ax"><span>1840</span><span>2025</span></div>'; }
+    tip.innerHTML = '<b>' + nm + '</b> in ' + year + '<div class="k">' + fmtLL(S.lat[i], 'N', 'S') + ' ' + fmtLL(S.lon[i], 'E', 'W') + ' · ~' + (Math.round(S.el[i] / 10) * 10) + ' m modelled</div>' + hist;
+    var hc = document.getElementById('hc'); if (hc) { var hx = hc.getContext('2d'), id = hx.createImageData(186, 1); for (var k = 0; k < 186; k++) { var cc = RGB[R.snaps[k * S.n + i]]; id.data[k * 4] = cc[0]; id.data[k * 4 + 1] = cc[1]; id.data[k * 4 + 2] = cc[2]; id.data[k * 4 + 3] = 255; } hx.putImageData(id, 0, 0); }
+    tip.hidden = false;
+    var box = $('mapbox').getBoundingClientRect(), tw = tip.offsetWidth, th = tip.offsetHeight;
+    var lx = x - box.left + 14, ly = y - box.top + 14; if (lx + tw > box.width - 8) lx = x - box.left - tw - 14; if (ly + th > box.height - 8) ly = y - box.top - th - 14;
+    tip.style.left = Math.max(8, lx) + 'px'; tip.style.top = Math.max(8, ly) + 'px';
+  }
+  canvas.addEventListener('pointermove', function (e) { if (e.pointerType === 'touch') return; tipCell = cellAt(e); tipX = e.clientX; tipY = e.clientY; showTip(tipCell, tipX, tipY); });
+  canvas.addEventListener('pointerleave', function (e) { if (e.pointerType === 'touch') return; tipCell = -1; tip.hidden = true; });
+  canvas.addEventListener('click', function (e) { tipCell = cellAt(e); tipX = e.clientX; tipY = e.clientY; showTip(tipCell, tipX, tipY); });
+
+  // ---- model runs ----
+  function params() { return { seed: +$('seed').value || 1, contagion: +$('pCont').value, noise: +$('pNoise').value, access: +$('pAcc').value }; }
+  [['pCont', 'oCont', 1], ['pNoise', 'oNoise', 2], ['pAcc', 'oAcc', 1]].forEach(function (p) { $(p[0]).addEventListener('input', function () { $(p[1]).textContent = (+this.value).toFixed(p[2]); }); });
+  $('reseed').addEventListener('click', function () { $('seed').value = 1 + Math.floor(Math.random() * 9999); runModel(false); });
+  $('rerun').addEventListener('click', function () { runModel(false); });
+  $('reset').addEventListener('click', function () { $('seed').value = 1; $('pCont').value = 1; $('pNoise').value = 0.35; $('pAcc').value = 1; $('oCont').textContent = '1.0'; $('oNoise').textContent = '0.35'; $('oAcc').textContent = '1.0'; });
+  function runModel(autoplay) {
+    stop(); $('loading').hidden = false; $('loadTxt').textContent = 'Running the model, 1840 to 2025…'; $('loadBar').style.width = '0';
+    ['rerun', 'reseed', 'play'].forEach(function (id) { $(id).disabled = true; });
+    var keepYear = R ? year : Y0;
+    setTimeout(function () {
+      M.run(S, params(), function (res) {
+        R = res; $('loading').hidden = true; ['rerun', 'reseed', 'play'].forEach(function (id) { $(id).disabled = false; });
+        buildChart(); setYear(autoplay ? Y0 : keepYear);
+        var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        if (autoplay && !reduce) play(); else if (autoplay) setYear(Y1);
+      }, function (p) { $('loadBar').style.width = Math.round(p * 100) + '%'; });
+    }, 30);
+  }
+
+  window.addEventListener('resize', sizeCanvas);
+  var mq = window.matchMedia('(prefers-color-scheme: dark)'); if (mq.addEventListener) mq.addEventListener('change', draw);
+  new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(draw);
+  sizeCanvas(); setYear(Y0); runModel(true);
+})();
+</script>
