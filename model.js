@@ -95,6 +95,9 @@ var NZModel = (function () {
     SCRUBF: [[1840, 1], [1860, 0.97], [1880, 0.75], [1900, 0.48], [1920, 0.36], [1950, 0.28], [1980, 0.2]]
   };
 
+  // population (thousands) of a town in a year, 0 before founding
+  function townPop(t, yr) { var p = t[4]; if (yr < t[3]) return 0; return Math.max(0.05, interp([[t[3], Math.min(p[0], 0.3) || 0.05], [1860, p[0]], [1900, p[1]], [1950, p[2]], [2020, p[3]], [2025, p[3] * 1.03]].filter(function (k, ix) { return ix === 0 || k[0] > t[3]; }), yr)); }
+
   // ---------- static build ----------
   function build(grid) {
     var W = grid.W, H = grid.H, CELL = grid.CELL, K = grid.K, KY = grid.KY, WH = W * H;
@@ -331,7 +334,6 @@ var NZModel = (function () {
       }
       for (t = 0; t <= NT; t++) { foot.push(Int32Array.from(lists[t])); footCount[t] = lists[t].length; }
     }
-    function townPop(t, yr) { var p = t[4]; if (yr < t[3]) return 0; return Math.max(0.05, interp([[t[3], Math.min(p[0], 0.3) || 0.05], [1860, p[0]], [1900, p[1]], [1950, p[2]], [2020, p[3]], [2025, p[3] * 1.03]].filter(function (k, ix) { return ix === 0 || k[0] > t[3]; }), yr)); }
 
     // ---- transitions between LCDB epochs (anchored) ----
     var pend = new Uint8Array(n), trans = [];
@@ -494,6 +496,6 @@ var NZModel = (function () {
     loop();
   }
 
-  return { C: C, HPG: HPG, Y0: Y0, Y1: Y1, build: build, run: run, TOWNS: TOWNS, DEM: DEM, agreement: agreement };
+  return { C: C, HPG: HPG, Y0: Y0, Y1: Y1, build: build, run: run, TOWNS: TOWNS, DEM: DEM, agreement: agreement, townPop: townPop };
 })();
 if (typeof module !== 'undefined') module.exports = NZModel;
