@@ -412,28 +412,48 @@ var GRID = /*GRID*/;
   }
   function draw() { renderImage(); compose(); }
 
-  var textW = {};
-  function drawLabels() {
-    var fs = dispW < 420 ? 11 : 12.5, font = '500 ' + fs + 'px ' + (tok('--f-body') || 'sans-serif');
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.font = font; ctx.textBaseline = 'middle';
-    var list = M.TOWNS.filter(function (t) { return t[3] <= year; }).map(function (t) { return { t: t, p: M.townPop(t, year) }; }).sort(function (a, b) { return b.p - a.p; });
-    var maxN = Math.round(11 * Math.pow(z, 1.15) * Math.max(0.7, dispW / 640)), placed = [], shown = 0;
-    var labCol = tok('--label'), halo = tok('--halo');
-    for (var k = 0; k < list.length && shown < maxN; k++) {
-      var t = list[k].t, x = (S.gxOf(t[1]) + 0.5 - vx0()) * vs(), y = (S.gyOf(t[2]) + 0.5 - vy0()) * vs();
-      if (x < -20 || y < -20 || x > dispW + 20 || y > dispH + 20) continue;
-      var key = t[0] + font, w = textW[key] || (textW[key] = ctx.measureText(t[0]).width);
-      var right = { x: x + 6, y: y - fs / 2 - 2, w: w + 2, h: fs + 4, left: false }, left = { x: x - 8 - w, y: y - fs / 2 - 2, w: w + 2, h: fs + 4, left: true };
+  // ---------- town labels ----------
+  // One fixed priority for every year: each town's mean share of the listed towns' population in 1900, 1950 and 2020.
+  var TPRI = (function () {
+    var tot = [0, 0, 0, 0]; M.TOWNS.forEach(function (t) { for (var k = 0; k < 4; k++) tot[k] += t[4][k]; });
+    return M.TOWNS.map(function (t) { var sh = 0; for (var k = 1; k < 4; k++) sh += t[4][k] / tot[k]; return { t: t, sh: sh }; })
+      .sort(function (a, b) { return b.sh - a.sh; }).map(function (o) { return o.t; });
+  })();
+  var textW = {}, layout = null, drawnLabels = [];
+  // Placement depends only on zoom (in quarter-octave steps) and canvas size, never on the year or the pan:
+  // every town keeps its slot and side, and towns not yet founded simply stay hidden.
+  function labelLayout(fs, font) {
+    var zq = Math.pow(2, Math.floor(Math.log2(z) * 4 + 1e-9) / 4), s = base * zq, key = s.toFixed(5) + '|' + font;
+    if (layout && layout.key === key) return layout.list;
+    var maxN = Math.round(12 * Math.pow(zq, 1.6) * Math.max(0.7, dispW / 640)), placed = [], list = [], Wp = W * s, Hp = H * s;
+    for (var k = 0; k < TPRI.length && list.length < maxN; k++) {
+      var t = TPRI[k], x = (S.gxOf(t[1]) + 0.5) * s, y = (S.gyOf(t[2]) + 0.5) * s;
+      var w = textW[t[0] + font] || (textW[t[0] + font] = ctx.measureText(t[0]).width);
+      var right = { x: x + 6, y: y - fs / 2 - 2, w: w + 3, h: fs + 4, left: false }, left = { x: x - 9 - w, y: y - fs / 2 - 2, w: w + 3, h: fs + 4, left: true };
       var opts = PREFER_LEFT.indexOf(t[0]) >= 0 ? [left, right] : [right, left], dot = { x: x - 3, y: y - 3, w: 6, h: 6 }, pick = null;
       for (var q = 0; q < 2 && !pick; q++) {
-        var bx = opts[q]; if (bx.x < 2 || bx.x + bx.w > dispW - 2 || bx.y < 2 || bx.y + bx.h > dispH - 2) continue;
+        var bx = opts[q]; if (bx.x < 2 || bx.x + bx.w > Wp - 2 || bx.y < 2 || bx.y + bx.h > Hp - 2) continue;
         if (!placed.some(function (p) { return overlap(p, bx) || overlap(p, dot); })) pick = bx;
       }
       if (!pick) continue;
-      placed.push(pick, dot); shown++;
+      placed.push(pick, dot); list.push({ t: t, left: pick.left });
+    }
+    layout = { key: key, list: list };
+    return list;
+  }
+  function drawLabels() {
+    var fs = dispW < 420 ? 11 : 12.5, font = '500 ' + fs + 'px ' + (tok('--f-body') || 'sans-serif');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.font = font; ctx.textBaseline = 'middle';
+    var list = labelLayout(fs, font), s = vs(), ox = vx0(), oy = vy0(), labCol = tok('--label'), halo = tok('--halo');
+    drawnLabels = [];
+    for (var k = 0; k < list.length; k++) {
+      var t = list[k].t; if (t[3] > year) continue;
+      var x = (S.gxOf(t[1]) + 0.5 - ox) * s, y = (S.gyOf(t[2]) + 0.5 - oy) * s;
+      if (x < -250 || y < -20 || x > dispW + 250 || y > dispH + 20) continue;
       ctx.fillStyle = labCol; ctx.beginPath(); ctx.arc(x, y, 2.3, 0, 7); ctx.fill();
-      ctx.textAlign = pick.left ? 'right' : 'left'; var tx = pick.left ? x - 6 : x + 6;
+      ctx.textAlign = list[k].left ? 'right' : 'left'; var tx = list[k].left ? x - 6 : x + 6;
       ctx.lineWidth = 3; ctx.strokeStyle = halo; ctx.lineJoin = 'round'; ctx.strokeText(t[0], tx, y); ctx.fillText(t[0], tx, y);
+      drawnLabels.push({ name: t[0], x: x + ox * s, y: y + oy * s, left: list[k].left });
     }
   }
   function overlap(a, b) { return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h; }
@@ -678,9 +698,9 @@ var GRID = /*GRID*/;
   window.addEventListener('resize', function () { sizeCanvas(); fitEvents(); });
   var mq = window.matchMedia('(prefers-color-scheme: dark)'); if (mq.addEventListener) mq.addEventListener('change', draw);
   new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
-  if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { textW = {}; compose(); fitEvents(); });
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { textW = {}; layout = null; compose(); fitEvents(); });
   fitEvents();
-  window.NZMap = { view: function () { return { z: z, cx: cx, cy: cy, base: base, dispW: dispW, dispH: dispH, year: year, avail: avail, W: W, H: H }; } };
+  window.NZMap = { labels: function () { return drawnLabels.map(function (l) { return { name: l.name, x: Math.round(l.x), y: Math.round(l.y), left: l.left }; }); }, view: function () { return { z: z, cx: cx, cy: cy, base: base, dispW: dispW, dispH: dispH, year: year, avail: avail, W: W, H: H }; } };
   sizeCanvas(); afterView(); setYear(Y0);
   setTimeout(function () {
     S = M.build(GRID);
