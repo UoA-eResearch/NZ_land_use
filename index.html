@@ -202,6 +202,11 @@ summary { cursor: pointer; font-weight: 600; font-size: 14px; }
           <option value="12" selected>12 yr/s</option>
           <option value="25">25 yr/s</option>
         </select>
+        <select id="pmode" aria-label="Playback mode">
+          <option value="once" selected>Play once</option>
+          <option value="loop">Loop</option>
+          <option value="boomerang">Boomerang</option>
+        </select>
       </div>
       <div class="row">
         <label class="chk"><input type="checkbox" id="relief" checked> Relief shading</label>
@@ -1034,20 +1039,50 @@ var GRID = {"W":1042,"H":1449,"CELL":1.0,"LAT0":-41.0,"LON0":166.3,"LATTOP":-34.
     $('event').innerHTML = '<span class="when">' + (ev[0] % 10 === 0 && ev[0] !== 1840 ? ev[0] + 's' : ev[0]) + '</span>' + ev[1];
     var era = ERAS[0][1]; ERAS.forEach(function (e) { if (e[0] <= year) era = e[1]; }); $('era').textContent = era;
     var cur = document.getElementById('cur'); if (cur) { cur.setAttribute('x1', sx(year)); cur.setAttribute('x2', sx(year)); }
-    if (!playing) $('play').textContent = year >= Y1 ? 'Replay' : 'Play';
+    if (!playing) $('play').textContent = year >= Y1 && $('pmode').value === 'once' ? 'Replay' : 'Play';
     updateLegend(); updateStatus(); draw(); if (tipCell >= 0) refreshTip();
   }
   $('yr').addEventListener('input', function () { stop(); setYear(+this.value); });
 
-  var last = 0, acc = 0, raf = 0;
-  function tick(t) { if (!playing) return; var dt = last ? (t - last) / 1000 : 0; last = t; acc += dt * +$('speed').value;
-    if (acc >= 1) { var stepN = Math.floor(acc); acc -= stepN;
-      if (year >= Y1) { stop(); return; }
-      if (year + stepN > avail) { acc = 0; if (avail > year) setYear(avail); }   // wait for the model to catch up
-      else setYear(year + stepN); }
-    raf = requestAnimationFrame(tick); }
-  function play() { if (!R) return; if (year >= Y1) setYear(Y0); playing = true; last = 0; acc = 0; $('play').textContent = 'Pause'; raf = requestAnimationFrame(tick); }
-  function stop() { playing = false; cancelAnimationFrame(raf); $('play').textContent = year >= Y1 ? 'Replay' : 'Play'; }
+  // playback: once, loop (2025 -> 1840) or boomerang (forward, then backward); brief hold at the ends when repeating
+  var last = 0, acc = 0, raf = 0, dir = 1, holdUntil = 0, HOLD = 900;
+  function tick(t) {
+    if (!playing) return;
+    var dt = last ? (t - last) / 1000 : 0; last = t;
+    if (t < holdUntil) { raf = requestAnimationFrame(tick); return; }
+    acc += dt * +$('speed').value;
+    if (acc >= 1) {
+      var n = Math.floor(acc), md = $('pmode').value; acc -= n;
+      if (dir > 0 && year >= Y1) {                                   // at the end, going forward
+        if (md === 'once') { stop(); return; }
+        if (md === 'loop') { setYear(Y0); holdUntil = t + HOLD / 2; } else { dir = -1; setYear(Y1 - n); }
+      } else if (dir < 0 && year <= Y0) { dir = 1; setYear(Y0 + n); }  // at the start, going backward
+      else if (dir > 0 && year + n > avail) { acc = 0; if (avail > year) setYear(avail); }   // wait for the model to catch up
+      else {
+        setYear(year + dir * n);
+        if ((dir > 0 && year >= Y1 && md !== 'once') || (dir < 0 && year <= Y0)) holdUntil = t + HOLD;
+      }
+    }
+    raf = requestAnimationFrame(tick);
+  }
+  function play() {
+    if (!R) return;
+    var md = $('pmode').value;
+    if (year >= Y1) { if (md === 'boomerang') dir = -1; else { dir = 1; setYear(Y0); } }
+    else if (year <= Y0 || md !== 'boomerang') dir = 1;
+    playing = true; last = 0; acc = 0; holdUntil = 0; $('play').textContent = 'Pause'; raf = requestAnimationFrame(tick);
+  }
+  $('pmode').addEventListener('change', function () { if (this.value !== 'boomerang') dir = 1; store('nzlu.pmode', this.value); });
+  $('speed').addEventListener('change', function () { store('nzlu.speed', this.value); });
+  function store(k, v) { try { localStorage.setItem(k, v); } catch (err) { /* storage unavailable */ } }
+  (function restore() {
+    try {
+      var pm = localStorage.getItem('nzlu.pmode'), sp = localStorage.getItem('nzlu.speed');
+      if (pm && $('pmode').querySelector('option[value="' + pm + '"]')) $('pmode').value = pm;
+      if (sp && $('speed').querySelector('option[value="' + sp + '"]')) $('speed').value = sp;
+    } catch (err) { /* storage unavailable */ }
+  })();
+  function stop() { playing = false; cancelAnimationFrame(raf); $('play').textContent = year >= Y1 && $('pmode').value === 'once' ? 'Replay' : 'Play'; }
   $('play').addEventListener('click', function () { playing ? stop() : play(); });
   document.addEventListener('keydown', function (e) {
     if (e.target.closest && e.target.closest('input[type=number], select, textarea')) return;

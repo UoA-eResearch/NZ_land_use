@@ -10,7 +10,7 @@ It is a prototype for a crowdsourced, decade-by-decade historical land-use map o
 
 ## What the page shows
 
-- A 1 km grid (269,475 land cells) with play and scrub through 1840–2025, plus three views: land use, changed since 1840, and when forest or wetland was cleared.
+- A 1 km grid (269,475 land cells) with play and scrub through 1840–2025 at 6, 12 or 25 years per second, played once, looped, or as a boomerang (forward then backward), plus three views: land use, changed since 1840, and when forest or wetland was cleared.
 - Zoom and pan: wheel, pinch, drag, double-click, +/− and reset buttons. Pixels stay crisp, the coastline keeps a constant width, labels declutter, and more towns appear as you zoom in.
 - Hover or tap a cell for its class history, elevation, slope and LCDB class.
 - Every year is labelled **observed** (an LCDB survey year), **interpolated** (between surveys) or **modelled** (before 1996, and 2024–25).
