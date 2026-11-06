@@ -409,7 +409,8 @@
     if (park.length) F.push({ l: 'lo', w: 'here', t: 'Urban parkland or open space', x: 'LCDB maps parkland or open space here in ' + yearsText(park) + '. Sports turf can involve persistent pesticides, and some parks and reserves were built on former tips; the aerial photos below can help.', h: ['A10'] });
     var built = yearsWith(1);
     if (built.length) F.push({ l: 'lo', w: 'here', t: 'Built-up area: house age and lead paint', x: 'LCDB maps this spot as built-up in ' + yearsText(built) + '. Ministry of Health advice is that if a house was built or repainted before about 1970, the paintwork should be assumed lead-based unless tested; flaking paint can raise lead in garden soil near buildings. Small commercial or industrial uses (service stations, workshops, dry cleaners) are not visible in national land-cover maps.', h: ['A5', 'F4', 'F7'] });
-    var farm = (at && at.some(function (c) { return c === 40 || c === 41 || c === 30; })) || (mod && mod.cls.some(function (c) { return c === 6 || c === 7 || c === 9; }));
+    var farmDecades = mod ? mod.cls.filter(function (c, k) { return mod.years[k] <= 1990 && (c === 6 || c === 7 || c === 9); }).length : 0;
+    var farm = (at && at.some(function (c) { return c === 40 || c === 41 || c === 30; })) || (farmDecades >= 3 && !(at && at[0] === 1));
     if (farm) F.push({ l: 'lo', w: 'info', t: 'Farmland history', x: 'This area has been farmed (LCDB grassland or cropland' + (mod ? ', or modelled farmland' : '') + '). Sheep dip and spray race sites were common on New Zealand farms, and older ones used arsenic and organochlorine chemicals. They are small and not mapped nationally.', h: ['A8'] });
     var order = { hi: 0, md: 1, lo: 2 }, wo = { here: 0, near: 1, info: 2 };
     return F.filter(Boolean).sort(function (a, b) { return order[a.l] - order[b.l] || wo[a.w] - wo[b.w]; });
