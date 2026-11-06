@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Land-Use History Report</title>
+<meta name="description" content="Look up the recorded and modelled land-use history of a place in Aotearoa New Zealand: historical aerial photos since the 1930s, LCDB land cover since 1996, mapped landfills and mines, and past uses on the Hazardous Activities and Industries List.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Young+Serif&family=Public+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+:root {
+  --bg: #eef1ef; --panel: #f7f9f8; --ink: #1b2420; --muted: #5d6a64; --rule: #c9d2ce;
+  --accent: #b23f2a; --accent-ink: #ffffff; --obs: #23698a; --obs-ink: #fff;
+  --flag-hi: #a3471f; --flag-hi-bg: #f6e6dc; --flag-md: #8a6a12; --flag-md-bg: #f4eccf; --flag-lo: #4f6470; --flag-lo-bg: #e6ecef;
+  --f-display: "Young Serif", "Iowan Old Style", Georgia, serif;
+  --f-body: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0f1513; --panel: #161e1b; --ink: #e2e9e5; --muted: #93a19b; --rule: #2b3632;
+  --accent: #e3725a; --accent-ink: #1a0f0b; --obs: #6cb4d6; --obs-ink: #08161d;
+  --flag-hi: #f0a07c; --flag-hi-bg: #3a2219; --flag-md: #e3c66b; --flag-md-bg: #332a12; --flag-lo: #a9bcc6; --flag-lo-bg: #1d2a30; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0f1513; --panel: #161e1b; --ink: #e2e9e5; --muted: #93a19b; --rule: #2b3632;
+  --accent: #e3725a; --accent-ink: #1a0f0b; --obs: #6cb4d6; --obs-ink: #08161d;
+  --flag-hi: #f0a07c; --flag-hi-bg: #3a2219; --flag-md: #e3c66b; --flag-md-bg: #332a12; --flag-lo: #a9bcc6; --flag-lo-bg: #1d2a30; color-scheme: dark }
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--f-body); font-size: 15px; line-height: 1.5;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 20px 40px; }
+[hidden] { display: none !important; }
+a { color: var(--accent); }
+.wrap { max-width: 1240px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+header { border-bottom: 1px solid var(--rule); padding-bottom: 14px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 8px 24px; }
+h1 { font-family: var(--f-display); font-weight: 400; font-size: clamp(1.6rem, 3.4vw, 2.3rem); line-height: 1.1; margin: 0; text-wrap: balance; }
+.sub { color: var(--muted); max-width: 70ch; margin: 6px 0 0; }
+.sheet { font-family: var(--f-mono); font-size: 12px; color: var(--muted); letter-spacing: .04em; text-transform: uppercase; }
+.sheet a { color: inherit; }
+form.search { display: flex; gap: 8px; flex-wrap: wrap; }
+form.search input { flex: 1 1 260px; min-width: 0; font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--rule); border-radius: 3px; padding: 9px 11px; }
+.btn { background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 3px; padding: 9px 16px; font: inherit; font-weight: 600; cursor: pointer; }
+.btn.ghost { background: transparent; color: var(--ink); border: 1px solid var(--rule); font-weight: 500; }
+.btn:focus-visible, input:focus-visible, select:focus-visible, .chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.btn:disabled { opacity: .55; cursor: default; }
+.hint { font-size: 13px; color: var(--muted); margin: 6px 0 0; }
+.results { list-style: none; margin: 8px 0 0; padding: 0; border: 1px solid var(--rule); border-radius: 3px; background: var(--panel); }
+.results li button { display: block; width: 100%; text-align: left; background: none; border: 0; border-bottom: 1px solid var(--rule); padding: 8px 11px; font: inherit; color: var(--ink); cursor: pointer; }
+.results li:last-child button { border-bottom: 0; }
+.results li button:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); }
+
+.main { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); gap: 24px; align-items: start; }
+@media (max-width: 900px) { .main { grid-template-columns: minmax(0, 1fr); } }
+.mapcol { position: sticky; top: 12px; display: flex; flex-direction: column; gap: 8px; }
+@media (max-width: 900px) { .mapcol { position: static; } }
+#map { height: min(72vh, 640px); border: 1px solid var(--rule); border-radius: 4px; background: #d3e0e3; }
+@media (max-width: 900px) { #map { height: 380px; } }
+.maptools { display: flex; gap: 10px 16px; flex-wrap: wrap; align-items: center; font-size: 13px; color: var(--muted); }
+.maptools select { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--rule); border-radius: 3px; padding: 3px 6px; }
+.maptools label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+.leaflet-container { font-family: var(--f-body); }
+.leaflet-tooltip.feat { font-size: 12px; }
+
+.report { display: flex; flex-direction: column; gap: 22px; min-width: 0; }
+.placeholder { border: 1px dashed var(--rule); border-radius: 4px; padding: 22px; color: var(--muted); }
+.placeholder h2 { color: var(--ink); }
+section h2 { font-family: var(--f-display); font-weight: 400; font-size: 1.3rem; margin: 0 0 8px; }
+section h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin: 14px 0 6px; font-weight: 600; }
+section p { margin: 0 0 8px; max-width: 72ch; }
+.place { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: flex-start; border-bottom: 1px solid var(--rule); padding-bottom: 12px; }
+.place .addr { font-family: var(--f-display); font-size: 1.5rem; line-height: 1.2; }
+.place .coords { font-family: var(--f-mono); font-size: 12px; color: var(--muted); margin-top: 4px; }
+.place .acts { display: flex; gap: 8px; flex-wrap: wrap; }
+.loadline { font-family: var(--f-mono); font-size: 12px; color: var(--muted); }
+
+.flags { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.flag { border-left: 4px solid var(--flag-lo); background: var(--flag-lo-bg); padding: 9px 12px; border-radius: 0 4px 4px 0; }
+.flag.hi { border-color: var(--flag-hi); background: var(--flag-hi-bg); }
+.flag.md { border-color: var(--flag-md); background: var(--flag-md-bg); }
+.flag .lvl { font-size: 11px; text-transform: uppercase; letter-spacing: .07em; font-weight: 600; color: var(--flag-lo); }
+.flag.hi .lvl { color: var(--flag-hi); } .flag.md .lvl { color: var(--flag-md); }
+.flag b { font-weight: 600; }
+.flag .hail { font-family: var(--f-mono); font-size: 11.5px; color: var(--muted); margin-top: 3px; }
+.note { font-size: 13px; color: var(--muted); }
+
+.chips { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.chip { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 4px; overflow: hidden; cursor: zoom-in; padding: 0; text-align: left; font: inherit; color: inherit; }
+.chip canvas { display: block; width: 100%; aspect-ratio: 1; background: color-mix(in srgb, var(--ink) 8%, var(--panel)); }
+.chip .cap { padding: 5px 8px 7px; font-size: 12px; line-height: 1.35; }
+.chip .cap b { font-family: var(--f-display); font-weight: 400; font-size: 1.05rem; }
+.chip .cap span { display: block; font-family: var(--f-mono); font-size: 10.5px; color: var(--muted); }
+.surveys { font-family: var(--f-mono); font-size: 12px; line-height: 1.7; }
+.surveys .dec { display: inline-block; min-width: 4.2em; color: var(--muted); }
+
+table.tl { border-collapse: collapse; width: 100%; font-size: 14px; }
+table.tl th, table.tl td { text-align: left; padding: 5px 8px 5px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+table.tl th { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; }
+table.tl td.yr { font-family: var(--f-mono); font-size: 13px; white-space: nowrap; }
+table.tl .sw { display: inline-block; width: 11px; height: 11px; border-radius: 2px; margin-right: 7px; vertical-align: -1px; border: 1px solid rgba(0,0,0,.15); }
+table.tl tr.obs td.src { color: var(--obs); font-weight: 600; }
+table.tl td.src { font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+table.tl tr.chg td.cls { font-weight: 600; }
+table.tl td.ph { font-family: var(--f-mono); font-size: 12px; color: var(--muted); }
+.legend-inline { font-size: 12.5px; color: var(--muted); margin-top: 6px; }
+.tblwrap { overflow-x: auto; }
+table.near { border-collapse: collapse; font-size: 13px; width: 100%; }
+table.near th, table.near td { text-align: left; padding: 4px 10px 4px 0; border-bottom: 1px solid var(--rule); }
+table.near td.n { font-family: var(--f-mono); text-align: right; white-space: nowrap; }
+table.near th { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; }
+table.near th.n { text-align: right; }
+ul.steps { margin: 0; padding-left: 20px; max-width: 72ch; }
+ul.steps li { margin-bottom: 6px; }
+.about { border-top: 1px solid var(--rule); padding-top: 16px; font-size: 13.5px; }
+.about p, .about ul { color: var(--ink); max-width: 80ch; }
+.muted { color: var(--muted); }
+
+.lightbox { position: fixed; inset: 0; background: rgba(10, 14, 12, .82); display: flex; align-items: center; justify-content: center; z-index: 2000; padding: 16px; }
+.lightbox figure { margin: 0; max-width: min(92vw, 900px); background: var(--panel); border-radius: 4px; overflow: hidden; }
+.lightbox canvas { display: block; width: 100%; height: auto; max-height: 80vh; object-fit: contain; background: #222; }
+.lightbox figcaption { padding: 8px 12px; font-size: 13px; display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+.lightbox button { font: inherit; }
+
+@media print {
+  body { background: #fff; color: #000; padding: 0; font-size: 11pt; }
+  form.search, .maptools, .place .acts, .noprint, .leaflet-control-container, #results { display: none !important; }
+  .main { display: block; }
+  .mapcol { position: static; }
+  #map { height: 300px; break-inside: avoid; margin-bottom: 12px; }
+  section { break-inside: avoid-page; }
+  .chips { grid-template-columns: repeat(4, 1fr); }
+  .chip { break-inside: avoid; }
+  a { color: #000; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Land-use history of a place</h1>
+      <p class="sub">Look up what a location in Aotearoa New Zealand has been used for: historical aerial photos since the 1930s, satellite land cover since 1996, mapped landfills, quarries and mines, and a modelled reconstruction back to 1840. A starting point for a site history, not a site investigation.</p>
+    </div>
+    <div class="sheet"><a href="../">← Land-use model 1840–2025</a></div>
+  </header>
+
+  <div>
+    <form class="search" id="search" role="search">
+      <input id="q" type="search" placeholder="Address or place, or latitude, longitude (e.g. -36.8485, 174.7633)" aria-label="Address, place or coordinates" autocomplete="off">
+      <button class="btn" type="submit">Look up</button>
+      <button class="btn ghost" type="button" id="locate">Use my location</button>
+    </form>
+    <p class="hint">Or click anywhere on the map. Addresses are looked up with OpenStreetMap Nominatim; nothing you search is stored by this site.</p>
+    <ul class="results" id="results" hidden></ul>
+  </div>
+
+  <div class="main">
+    <div class="mapcol">
+      <div id="map" aria-label="Map. Click to choose a location."></div>
+      <div class="maptools">
+        <label><input type="checkbox" id="lcdbOn"> LCDB land cover</label>
+        <select id="lcdbYear" aria-label="LCDB year"><option value="0">1996/97</option><option value="1">2001/02</option><option value="2">2008/09</option><option value="3">2012/13</option><option value="4">2018/19</option><option value="5" selected>2023/24</option></select>
+        <label><input type="checkbox" id="featOn" checked> Landfills, quarries &amp; mines</label>
+      </div>
+    </div>
+    <div class="report" id="report">
+      <div class="placeholder">
+        <h2>Choose a place</h2>
+        <p>Search for an address or click on the map. The report brings together what national open datasets record about that spot and its surroundings, decade by decade.</p>
+        <p class="muted">It is written to support conversations about past land use, for example before establishing a garden, buying land or planning soil tests. A past activity on the Hazardous Activities and Industries List does not mean land is contaminated, and contamination can occur where nothing is recorded.</p>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="lightbox" id="lightbox" hidden role="dialog" aria-modal="true" aria-label="Aerial photo">
+  <figure><canvas id="lbCanvas" width="900" height="900"></canvas><figcaption><span id="lbCap"></span><button class="btn ghost" type="button" id="lbClose">Close</button></figcaption></figure>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.12.1/proj4.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

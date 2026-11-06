@@ -8,6 +8,66 @@ Animated cellular-automaton model of Aotearoa New Zealand land-use change, 1840�
 
 It is a prototype for a crowdsourced, decade-by-decade historical land-use map of New Zealand.
 
+## Land-use history report for a place
+
+**Live tool:** https://uoa-eresearch.github.io/NZ_land_use/report/
+
+Enter an address or coordinates, or click the map, to get a printable report on what national open datasets record about that spot. It is meant as a starting point for a site history, for example before establishing a community garden or planning soil tests. It is not a site investigation. The report includes:
+
+- **Worth a closer look:** past uses from the Hazardous Activities and Industries List (HAIL, Ministry for the Environment, October 2011) recorded at the point or nearby, quoting the HAIL activity:
+  - a surface mine or dump in LCDB (E7, G3, G5)
+  - LINZ Topo50 landfills, mines and quarries (G3, E7, H)
+  - orchards (A10), cropping, transport land and parkland
+  - for built-up land, the Ministry of Health advice to assume lead paint on houses built or repainted before about 1970
+  - for farmland, sheep dips (A8)
+
+  The wording is deliberately cautious: a past HAIL use does not mean land is contaminated.
+- **Aerial photos through time:** one image per decade (1930s–2020s) of about 400 m around the point. Images are read straight from LINZ's public `nz-imagery` bucket (orthorectified historical surveys and recent regional surveys) by a small built-in COG reader, which fetches only the WebP tiles it needs. The report also lists every Crown Aerial Film Library survey (1936–2008) that photographed the surrounding 1 km square, for follow-up on Retrolens.
+- **Land use decade by decade:** the modelled class of the surrounding 1 km cell for 1840–1990 (labelled modelled, low confidence), then the LCDB class at the point for each survey from 1996/97 to 2023/24.
+- **Around this point:** LCDB land cover within 250 m in 1996 and 2023, and Topo50 landfills, quarries and mines within 2 km.
+- **Next steps:** Retrolens, the council LIM, regional council HAIL registers and MfE guidance.
+- **Map:** an optional LCDB overlay for any survey year, plus Topo50 landfills, quarries and mines. There is a "Print or save PDF" button, and a shareable link that holds only the coordinates.
+
+Privacy: everything runs in the browser on static files. The only outside requests are OpenStreetMap map tiles and, for address search, OpenStreetMap Nominatim. Nothing is stored.
+
+Data built for the report (`report/data/`, about 50 MB):
+
+| Script | Output |
+| --- | --- |
+| `data/report_lcdb.py` | LCDB v6.0 six-survey class history at 25 m in NZTM: 7,325 compressed 6.4 km tiles plus a table of 3,873 distinct histories |
+| `data/report_imagery.py` | Index of 536 LINZ imagery collections (361 flown before 2000) and the Topo50-grid tiles each holds |
+| `data/fetch_footprints.sh`, `data/report_footprints.py` | Crown Aerial Film Library footprints (431,633 with geometry, 4,097 surveys) indexed by 1 km square |
+| `data/report_features.py` | LINZ Topo50 landfill, quarry and mine polygons and points |
+| `data/report_model.js` | Decade snapshots (1840–1995) and clearance year from the default model run |
+
+```bash
+LRIS_KEY=... sh data/fetch_lcdb.sh cache/lcdb
+```
+
+```bash
+python3 data/report_lcdb.py cache/lcdb report/data
+```
+
+```bash
+python3 data/report_imagery.py report/data/imagery.json
+```
+
+```bash
+LINZ_KEY=... sh data/fetch_footprints.sh cache/footprints
+```
+
+```bash
+python3 data/report_footprints.py cache/footprints report/data
+```
+
+```bash
+LINZ_KEY=... python3 data/report_features.py report/data/features.json
+```
+
+```bash
+node data/report_model.js grid.json report/data/model.bin
+```
+
 ## What the page shows
 
 - A 1 km grid (269,475 land cells) with play and scrub through 1840–2025 at 6, 12 or 25 years per second, played once, looped, or as a boomerang (forward then backward), plus three views: land use, changed since 1840, and when forest or wetland was cleared.
@@ -29,7 +89,7 @@ It then takes the top N cells with an O(n) bucketed selection. The order each ye
 **Anchored mode (default).**
 
 - LCDB v6.0 gives each cell's observed class in 1996/97, 2001/02, 2008/09, 2012/13, 2018/19 and 2023/24.
-- **1840 map:** natural cover still present in 1996 (indigenous forest, tussock, wetland, alpine) is assumed present in 1840. Cells developed by 1996 are filled with wetland, tussock, fernland, Māori gardens or forest, using rain shadow, wetland zones, Māori settlement and neighbouring 1996 cover. The 1840 targets are forest 53%, wetland ≈10× today's mapped extent and tussock 21.5%.
+- **1840 map:** natural cover still present in 1996 (indigenous forest, tussock, wetland, alpine) is assumed present in 1840. Cells developed by 1996 are filled with wetland, tussock, fernland, Māori gardens or forest, using rain shadow, wetland zones, Māori settlement and neighbouring 1996 cover. The 1840 targets are forest 53%, wetland ≈10× today's mapped extent and tussock 26%.
 - **1840–1996:** each cell may only move towards its 1996 class, and the curves are rescaled to meet the observed 1996 totals. The CA chooses the timing and the route, for example forest → pasture → scrub. In the default run only 98 cells (0.04%) still have to be forced into line at 1996.
 - **1996–2023:** the cells that change between two surveys switch during the interval, those next to their new class first.
 - Dairy vs sheep & beef is not observed. Dairy is allocated inside LCDB high-producing grassland to follow national dairy area.
@@ -96,4 +156,8 @@ API keys come from free accounts on the [LINZ Data Service](https://data.linz.go
 - Land cover: [LCDB v6.0](https://lris.scinfo.org.nz/layer/123148-lcdb-v60-land-cover-database-version-60-mainland-new-zealand/), Manaaki Whenua – Landcare Research, CC BY 4.0.
 - Elevation: [NZDEM-HGT-30](https://github.com/JohnLeber/NZDEM-HGT-30), interpolated from LINZ topographic contours, CC BY 4.0, data © Toitū Te Whenua LINZ.
 - Coastline: [NZ Coastlines and Islands Polygons (Topo 1:50k)](https://data.linz.govt.nz/layer/51153-nz-coastlines-and-islands-polygons-topo-150k/), Toitū Te Whenua LINZ, CC BY 4.0.
+- Aerial imagery: [LINZ nz-imagery](https://registry.opendata.aws/nz-imagery/) (orthorectified historical and recent surveys) and [NZ Aerial Photo Footprints 1936–2008](https://data.linz.govt.nz/layer/51002-nz-aerial-photo-footprints-mainland-nz-1936-2008-polygons/), Toitū Te Whenua LINZ, CC BY 4.0.
+- Landfills, quarries and mines: LINZ Topo50 layers 50294, 50314, 50301 and 50300, CC BY 4.0.
+- Hazardous Activities and Industries List (HAIL), Ministry for the Environment, October 2011.
+- Address search: [OpenStreetMap Nominatim](https://nominatim.org/); map tiles © OpenStreetMap contributors.
 - Historical context: [Te Ara 1840 vegetation map](https://teara.govt.nz/en/map/17881/new-zealand-vegetation-cover-around-1840), Mike Pole, [Estimating a vanished landscape: mapping New Zealand's 1840 forest cover](https://web.archive.org/web/20260713064811/https://www.mikepole.com/2026/06/18/estimating-a-vanished-landscape-mapping-new-zealands-1840-forest-cover/) (archived copy; the original post is no longer online), [MfE LUCAS](https://environment.govt.nz/facts-and-science/science-and-data/new-zealand-land-use-map), [MapsPast](https://mapspast.org.nz/).

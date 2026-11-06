@@ -18,7 +18,7 @@ var NZModel = (function () {
   var C = { SEA: 0, NAT: 1, SCRUB: 2, TUSS: 3, WET: 4, ALP: 5, SHEEP: 6, DAIRY: 7, PINE: 8, CROP: 9, URB: 10, LAKE: 11 };
   var HPG = 12;                                   // observed code: high-producing exotic grassland
   var Y0 = 1840, Y1 = 2025;
-  var FOREST1840 = 0.53, TUSS1840 = 0.215, WET_REMAIN = 0.10, GARDENS1840 = 0.0025;
+  var FOREST1840 = 0.53, TUSS1840 = 0.26, WET_REMAIN = 0.10, GARDENS1840 = 0.0025;
 
   // ---------- helpers ----------
   function mulberry(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; var t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
@@ -291,7 +291,7 @@ var NZModel = (function () {
       for (i = 0; i < n; i++) { c = dest[i]; if (c === C.NAT || c === C.TUSS || c === C.WET || c === C.ALP) setC(i, c); }
       initPick(nWET0 - cnt[C.WET], yes, function (i) { return 2.2 * nr[C.WET][i] + 1.3 * S.wetZ[i] + 0.9 * flat(i) + 0.7 * low(i) - S.sl[i] / 6 + (dest[i] === HPG ? 0.25 : 0) + ir() * 0.5; }).forEach(function (i) { setC(i, C.WET); });
       initPick(nGard, yes, function (i) { return S.gardens[i] + 0.4 * flat(i) - S.el[i] / 300 + (dest[i] === C.CROP ? 0.3 : 0) + ir() * 0.3; }).forEach(function (i) { setC(i, C.CROP); origin[i] = 1; });
-      initPick(nTUSS0 - cnt[C.TUSS], yes, function (i) { return 3.2 * nr[C.TUSS][i] - 1.6 * nr[C.NAT][i] + (S.si[i] ? 1.6 * S.dry[i] + 0.3 : -0.6) + 1.4 * S.plateau[i] - Math.abs(S.el[i] - 500) / 1400 + ir() * 0.5; }).forEach(function (i) { setC(i, C.TUSS); });
+      initPick(nTUSS0 - cnt[C.TUSS], yes, function (i) { return 3.2 * nr[C.TUSS][i] - 1.6 * nr[C.NAT][i] + (S.si[i] ? 1.6 * S.dry[i] + 0.3 + 4.0 * S.dry[i] * flat(i) : -0.6) + 1.4 * S.plateau[i] - Math.abs(S.el[i] - 500) / 1400 + ir() * 0.5; }).forEach(function (i) { setC(i, C.TUSS); });
       initPick(nSCRUB0, yes, function (i) { return 1.1 * S.maori[i] * (S.si[i] ? 0.5 : 1) + 1.3 * nr[C.SCRUB][i] + (dest[i] === C.SCRUB ? 0.5 : 0) - 1.2 * nr[C.NAT][i] + 0.5 * S.plateau[i] - Math.max(0, S.el[i] - 300) / 500 + ir() * 0.5; }).forEach(function (i) { setC(i, C.SCRUB); });
     } else {
       initPick(nALP, yes, function (i) { return S.el[i] - (1550 - Math.max(0, -38 - S.lat[i]) * 50) + 4 * S.sl[i]; }).forEach(function (i) { setC(i, C.ALP); });

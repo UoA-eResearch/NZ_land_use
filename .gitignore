@@ -1,5 +1,6 @@
 node_modules/
 cache/
-*.bin
+snaps.bin
+elev.bin
 meta.json
 shots/
